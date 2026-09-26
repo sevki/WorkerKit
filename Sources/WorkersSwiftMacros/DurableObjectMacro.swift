@@ -34,8 +34,10 @@ public struct DurableObjectMacro: PeerMacro, ExtensionMacro {
                 "@RPC method name \(invalid.name.text) must also be a JavaScript method name (ASCII letters, digits, _ and $)"
             )
         }
-        // The generated JavaScript class defines these itself.
-        if let reserved = rpcMethods.first(where: { ["constructor", "fetch", "alarm"].contains($0.name.text) }) {
+        // The generated JavaScript class defines these methods itself, and
+        // its DurableObject base class sets `ctx` and `env` as instance
+        // fields, which would hide methods of the same name.
+        if let reserved = rpcMethods.first(where: { ["constructor", "fetch", "alarm", "ctx", "env"].contains($0.name.text) }) {
             throw MacroExpansionErrorMessage("@RPC method \(reserved.name.text) clashes with the Durable Object class's own \(reserved.name.text)")
         }
 
@@ -96,7 +98,12 @@ public struct RPCMacro: PeerMacro {
             throw MacroExpansionErrorMessage("@RPC methods must be instance methods")
         }
         guard context.lexicalContext.isEmpty else {
-            // A Durable Object method: @DurableObject registers it.
+            // A Durable Object method: @DurableObject registers it, but only
+            // from the class body it is attached to.
+            guard let enclosing = context.lexicalContext.first?.as(ClassDeclSyntax.self),
+                  enclosing.attributes.contains(where: { isAttribute($0, named: "DurableObject") }) else {
+                throw MacroExpansionErrorMessage("@RPC methods must be declared in the body of a @DurableObject class")
+            }
             return []
         }
 
@@ -151,11 +158,17 @@ func rpcCallBody(_ method: FunctionDeclSyntax, receiver: String) -> String {
 
 /// Whether `element` is `@RPC`, including the qualified `@WorkersSwift.RPC`.
 private func isRPCAttribute(_ element: AttributeListSyntax.Element) -> Bool {
-    guard let name = element.as(AttributeSyntax.self)?.attributeName else {
+    isAttribute(element, named: "RPC")
+}
+
+/// Whether `element` is the attribute `@name`, qualified or not.
+private func isAttribute(_ element: AttributeListSyntax.Element, named name: String) -> Bool {
+    guard let attributeName = element.as(AttributeSyntax.self)?.attributeName else {
         return false
     }
-    let lastComponent = name.as(MemberTypeSyntax.self)?.name.text ?? name.as(IdentifierTypeSyntax.self)?.name.text
-    return lastComponent == "RPC"
+    let lastComponent = attributeName.as(MemberTypeSyntax.self)?.name.text
+        ?? attributeName.as(IdentifierTypeSyntax.self)?.name.text
+    return lastComponent == name
 }
 
 /// Whether `name` is an ASCII JavaScript identifier, as `worker-build` needs

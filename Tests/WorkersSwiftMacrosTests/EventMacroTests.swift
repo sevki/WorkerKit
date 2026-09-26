@@ -335,4 +335,47 @@ final class EventMacroTests: XCTestCase {
             macros: macros
         )
     }
+
+    func testRPCRejectsMethodsOutsideDurableObjects() {
+        assertMacroExpansion(
+            """
+            final class Plain {
+                @RPC func ping() {
+                }
+            }
+            """,
+            expandedSource: """
+            final class Plain {
+                func ping() {
+                }
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(message: "@RPC methods must be declared in the body of a @DurableObject class", line: 2, column: 5),
+            ],
+            macros: macros
+        )
+    }
+
+    func testDurableObjectRejectsInheritedFieldNames() {
+        assertMacroExpansion(
+            """
+            @DurableObject
+            final class Room {
+                @RPC func env() {
+                }
+            }
+            """,
+            expandedSource: """
+            final class Room {
+                func env() {
+                }
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(message: "@RPC method env clashes with the Durable Object class's own env", line: 1, column: 1),
+            ],
+            macros: macros
+        )
+    }
 }

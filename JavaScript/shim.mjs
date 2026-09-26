@@ -155,10 +155,13 @@ async function start() {
   );
   memory = instance.exports.memory;
 
-  // SwiftPM links the module with `-mexec-model=reactor`; a reactor must run
-  // its static constructors through `_initialize` before any other export.
-  instance.exports._initialize?.();
+  // JavaScriptKit's imports need the instance, and static constructors may
+  // already call them, so install it first (as JavaScriptKit's own loader
+  // does). Then run the constructors: SwiftPM links the module with
+  // `-mexec-model=reactor`, and a reactor runs them through `_initialize`
+  // before any other export.
   swift.setInstance(instance);
+  instance.exports._initialize?.();
 
   // A reactor module does not export `main`, so SwiftRuntime.main() would not
   // reach Swift. Instead:
@@ -194,7 +197,7 @@ async function __workersSwiftDurableObject(name, ctx, env) {
   if (typeof factory !== "function") {
     throw new Error(`The Swift worker has no @DurableObject class ${name}`);
   }
-  const object = factory(ctx, env);
+  const object = factory(trackingWaitUntil(ctx), env);
   return {
     fetch: (request) => flushingConsole(() => object.fetch(request)),
     alarm: () => flushingConsole(() => object.alarm()),

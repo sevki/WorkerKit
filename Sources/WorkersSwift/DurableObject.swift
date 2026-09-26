@@ -133,15 +133,24 @@ public final class DurableObjectStub: @unchecked Sendable {
 
     /// Sends a request to the object's `fetch` handler.
     public func fetch(_ url: String) async throws -> FetchResponse {
-        let response = try await awaitValue(jsObject.fetch!(url))
+        let response = try await awaitValue(invoke("fetch", [url]))
         return FetchResponse(response.object!)
     }
 
     private func callValue(_ method: String, _ arguments: [any ConvertibleToJSValue]) async throws -> JSValue {
-        guard let function = jsObject[method].object else {
-            throw JSException(message: "The Durable Object has no RPC method \(method)")
+        try await awaitValue(invoke(method, arguments))
+    }
+
+    /// Calls `stub[method](...arguments)` through `Reflect.apply`. JavaScriptKit
+    /// calls functions with `function.apply(this, arguments)`, but on a
+    /// workerd stub every property of an RPC method is itself a remote call,
+    /// so `.apply` would be sent to the Durable Object as a method call.
+    private func invoke(_ method: String, _ arguments: [any ConvertibleToJSValue]) -> JSValue {
+        let argumentList = JSObject.global.Array.object!.new()
+        for argument in arguments {
+            _ = argumentList.push!(argument)
         }
-        return try await awaitValue(function(this: jsObject, arguments: arguments))
+        return JSObject.global.Reflect.object!.apply!(jsObject[method], jsObject, argumentList)
     }
 }
 

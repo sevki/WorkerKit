@@ -1,4 +1,6 @@
-#if canImport(Synchronization)
+// Embedded Swift ships Synchronization without Mutex; its Wasm target is
+// single-threaded, so ABIState falls back to unguarded storage there.
+#if canImport(Synchronization) && !hasFeature(Embedded)
 import Synchronization
 #endif
 
@@ -50,7 +52,7 @@ private struct WasmAllocation: Sendable {
 /// Guards the ABI's global state. Native `swift test` runs tests in parallel,
 /// so it needs a real lock; a Wasm module in workerd/celld is single-threaded.
 private final class ABIState<Value: Sendable>: @unchecked Sendable {
-    #if canImport(Synchronization)
+    #if canImport(Synchronization) && !hasFeature(Embedded)
     private let mutex: Mutex<Value>
 
     init(_ value: Value) {

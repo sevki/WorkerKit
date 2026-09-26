@@ -58,5 +58,5 @@ public struct EventMacro: PeerMacro {
 
 @main
 struct WorkersSwiftMacrosPlugin: CompilerPlugin {
-    let providingMacros: [any Macro.Type] = [EventMacro.self]
+    let providingMacros: [any Macro.Type] = [EventMacro.self, DurableObjectMacro.self, RPCMacro.self]
 }

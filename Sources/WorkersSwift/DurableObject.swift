@@ -1,0 +1,177 @@
+import JavaScriptEventLoop
+import JavaScriptKit
+
+/// A Durable Object class, like workers-rs' `DurableObject` trait. Mark the
+/// class with `@DurableObject` and its RPC methods with `@RPC`:
+///
+///     @DurableObject
+///     final class Counter: DurableObject {
+///         let state: DurableObjectState
+///
+///         init(state: DurableObjectState, env: Env) {
+///             self.state = state
+///         }
+///
+///         @RPC func increment(by amount: Int) async throws -> Int {
+///             let count = (try await state.storage.get("count", as: Int.self) ?? 0) + amount
+///             try await state.storage.put("count", count)
+///             return count
+///         }
+///     }
+///
+/// The runtime creates one instance per object id and calls it on a single
+/// thread, so a class can keep mutable state without being `Sendable`.
+public protocol DurableObject: AnyObject {
+    init(state: DurableObjectState, env: Env)
+
+    /// Handles a request sent with `DurableObjectStub.fetch(_:)`.
+    func fetch(_ req: Request) async throws -> Response
+
+    /// Runs when an alarm set with `storage.setAlarm` fires.
+    func alarm() async throws
+}
+
+extension DurableObject {
+    public func fetch(_ req: Request) async throws -> Response {
+        .error("Not Implemented", 501)
+    }
+
+    public func alarm() async throws {}
+}
+
+/// The Durable Object's state: the runtime's `ctx` object.
+public final class DurableObjectState: @unchecked Sendable {
+    /// The underlying JavaScript `DurableObjectState`.
+    public let jsObject: JSObject
+
+    public init(_ jsObject: JSObject) {
+        self.jsObject = jsObject
+    }
+
+    /// The object's id, as a hex string.
+    public var id: String {
+        jsObject.id.toString().string ?? ""
+    }
+
+    /// The object's transactional storage.
+    public var storage: DurableObjectStorage {
+        DurableObjectStorage(jsObject.storage.object!)
+    }
+}
+
+/// A Durable Object's key-value storage: the runtime's `ctx.storage`.
+public final class DurableObjectStorage: @unchecked Sendable {
+    /// The underlying JavaScript `DurableObjectStorage`.
+    public let jsObject: JSObject
+
+    public init(_ jsObject: JSObject) {
+        self.jsObject = jsObject
+    }
+
+    /// The value stored under `key`, or `nil` when there is none or it is not
+    /// a `T`.
+    public func get<T: ConstructibleFromJSValue>(_ key: String, as type: T.Type = T.self) async throws -> T? {
+        let value = try await JSPromise(jsObject.get!(key).object!)!.value
+        return value.isUndefined ? nil : T.construct(from: value)
+    }
+
+    /// Stores `value` under `key`.
+    public func put(_ key: String, _ value: some ConvertibleToJSValue) async throws {
+        _ = try await JSPromise(jsObject.put!(key, value).object!)!.value
+    }
+
+    /// Deletes `key`, returning whether it existed.
+    @discardableResult
+    public func delete(_ key: String) async throws -> Bool {
+        try await JSPromise(jsObject.delete!(key).object!)!.value.boolean ?? false
+    }
+}
+
+/// A Durable Object namespace binding, such as `env.durableObject("COUNTER")`.
+public final class DurableObjectNamespace: @unchecked Sendable {
+    /// The underlying JavaScript `DurableObjectNamespace`.
+    public let jsObject: JSObject
+
+    public init(_ jsObject: JSObject) {
+        self.jsObject = jsObject
+    }
+
+    /// The stub for the object named `name`.
+    public func get(named name: String) -> DurableObjectStub {
+        let id = jsObject.idFromName!(name)
+        return DurableObjectStub(jsObject.get!(id).object!)
+    }
+}
+
+/// A client for one Durable Object.
+public final class DurableObjectStub: @unchecked Sendable {
+    /// The underlying JavaScript `DurableObjectStub`.
+    public let jsObject: JSObject
+
+    public init(_ jsObject: JSObject) {
+        self.jsObject = jsObject
+    }
+
+    /// Calls the `@RPC` method `method` with `arguments` and returns its
+    /// result as a `T`.
+    public func call<T: ConstructibleFromJSValue>(
+        _ method: String,
+        _ arguments: any ConvertibleToJSValue...,
+        as type: T.Type = T.self
+    ) async throws -> T {
+        let value = try await callValue(method, arguments)
+        guard let result = T.construct(from: value) else {
+            throw JSException(message: "RPC method \(method) returned \(value), not a \(T.self)")
+        }
+        return result
+    }
+
+    /// Calls the `@RPC` method `method`, ignoring its result.
+    public func call(_ method: String, _ arguments: any ConvertibleToJSValue...) async throws {
+        _ = try await callValue(method, arguments)
+    }
+
+    /// Sends a request to the object's `fetch` handler.
+    public func fetch(_ url: String) async throws -> FetchResponse {
+        let response = try await awaitValue(jsObject.fetch!(url))
+        return FetchResponse(response.object!)
+    }
+
+    private func callValue(_ method: String, _ arguments: [any ConvertibleToJSValue]) async throws -> JSValue {
+        guard let function = jsObject[method].object else {
+            throw JSException(message: "The Durable Object has no RPC method \(method)")
+        }
+        return try await awaitValue(function(this: jsObject, arguments: arguments))
+    }
+}
+
+/// Awaits `value` the way JavaScript's `await` does. Stubs return RPC
+/// thenables that are not `Promise` instances, so they go through
+/// `Promise.resolve` first.
+func awaitValue(_ value: JSValue) async throws -> JSValue {
+    let promise = JSObject.global.Promise.object!.resolve!(value).object!
+    return try await JSPromise(promise)!.value
+}
+
+/// A response received from `fetch`: the runtime's JavaScript `Response`.
+public final class FetchResponse: @unchecked Sendable {
+    /// The underlying JavaScript `Response`.
+    public let jsObject: JSObject
+
+    public init(_ jsObject: JSObject) {
+        self.jsObject = jsObject
+    }
+
+    public var status: Int {
+        Int(jsObject.status.number ?? 0)
+    }
+
+    public var headers: Headers {
+        Headers(jsObject.headers.object!)
+    }
+
+    /// Reads the body as UTF-8 text.
+    public func text() async throws -> String {
+        try await JSPromise(jsObject.text!().object!)!.value.string ?? ""
+    }
+}

@@ -24,6 +24,7 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
 |---|---|
 | `worker` (`Request`, `Response`, `Env`, `Context`, …) | `WorkersSwift` |
 | `#[event(fetch)]` | `@Event(.fetch)` (`WorkersSwiftMacros`) |
+| `#[durable_object]` + `impl DurableObject` | `@DurableObject` class, with `@RPC` methods |
 | `wasm-bindgen`, `js-sys`, `wasm-bindgen-futures` | [JavaScriptKit](https://github.com/swiftwasm/JavaScriptKit) and JavaScriptEventLoop |
 | `worker-build` and its `shim.mjs` | `swift package worker-build` (`Plugins/WorkerBuild`) and `JavaScript/shim.mjs` |
 
@@ -33,7 +34,45 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
 - A status outside 200–599 or a header that the Fetch `Headers` class would reject becomes a `500` rather than a JavaScript exception, and 204, 205 and 304 are sent without a body.
 - An error thrown by the handler is logged with `console.error` and becomes `500 Internal Server Error`.
 
-`Env` reads plain-text bindings (`env.variable("NAME")`, `env.secret("NAME")`), and `Context` exposes `waitUntil` and `passThroughOnException`. Typed bindings such as KV, R2, D1 and Durable Objects are not wrapped yet.
+`Env` reads plain-text bindings (`env.variable("NAME")`, `env.secret("NAME")`) and Durable Object namespaces (`env.durableObject("NAME")`), and `Context` exposes `waitUntil` and `passThroughOnException`. Other typed bindings such as KV, R2 and D1 are not wrapped yet.
+
+## Durable Objects and RPC
+
+```swift
+@DurableObject
+final class Counter {
+    let state: DurableObjectState
+
+    init(state: DurableObjectState, env: Env) {
+        self.state = state
+    }
+
+    // Requests sent with stub.fetch(_:). Optional; the default answers 501.
+    func fetch(_ req: Request) async throws -> Response {
+        .ok(String(try await state.storage.get("count", as: Int.self) ?? 0))
+    }
+
+    // Callable from other workers and objects through the stub.
+    @RPC func increment(by amount: Int) async throws -> Int {
+        let count = (try await state.storage.get("count", as: Int.self) ?? 0) + amount
+        try await state.storage.put("count", count)
+        return count
+    }
+}
+
+// In a handler:
+let counter = env.durableObject("COUNTER").get(named: "global")
+let count = try await counter.call("increment", 1, as: Int.self)
+let response = try await counter.fetch("https://counter/")
+```
+
+- `@DurableObject` adds the `DurableObject` conformance (`init(state:env:)`, and optional `fetch(_:)` and `alarm()`), and generates a Wasm export named after the class and its `@RPC` methods.
+- `worker-build` reads those exports and writes an `export class Counter extends DurableObject` (from `cloudflare:workers`) into `worker.mjs`, with one method per `@RPC` method, so the runtime sees an ordinary Durable Object class with RPC methods.
+- RPC arguments and results convert through JavaScriptKit's `ConstructibleFromJSValue` and `ConvertibleToJSValue` (`Int`, `Double`, `String`, `Bool`, …).
+- `DurableObjectState.storage` offers `get(_:as:)`, `put(_:_:)` and `delete(_:)`, and `jsObject` for the rest of the storage API.
+- Bind the class as usual, for example in wrangler.jsonc: `"durable_objects": { "bindings": [{ "name": "COUNTER", "class_name": "Counter" }] }` with a migration that adds `Counter`.
+
+RPC on the default entrypoint (`WorkerEntrypoint`, for service bindings) is not supported yet.
 
 ## Repository layout
 

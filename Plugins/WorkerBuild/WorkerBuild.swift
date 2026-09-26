@@ -87,8 +87,12 @@ struct WorkerBuild: CommandPlugin {
             try fileManager.removeItem(at: wasmDestination)
         }
         try fileManager.copyItem(at: wasm, to: wasmDestination)
-        try bundle(runtime: runtime, shim: shim)
+        let durableObjects = try durableObjectExports(inWasm: wasm)
+        try (bundle(runtime: runtime, shim: shim) + durableObjectClasses(durableObjects))
             .write(to: outputDirectory.appending(path: "worker.mjs"), atomically: true, encoding: .utf8)
+        for (name, methods) in durableObjects {
+            print("worker-build: Durable Object \(name)\(methods.isEmpty ? "" : " (RPC: \(methods.joined(separator: ", ")))")")
+        }
 
         print("worker-build: wrote \(outputDirectory.appending(path: "worker.mjs").path()) and \(Self.wasmName)")
     }
@@ -154,6 +158,117 @@ struct WorkerBuild: CommandPlugin {
         var bundled = runtimeSource
         bundled.removeSubrange(range)
         return bundled + "\n" + (try String(contentsOf: shim, encoding: .utf8))
+    }
+
+    /// The `@DurableObject` classes and their `@RPC` methods, from the
+    /// `workers_do:<Class>[:<method>,<method>…]` exports of the module.
+    private func durableObjectExports(inWasm url: URL) throws -> [(name: String, methods: [String])] {
+        try wasmExportNames(Array(Data(contentsOf: url)))
+            .filter { $0.hasPrefix("workers_do:") }
+            .map { export in
+                let parts = export.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+                let methods = parts.count > 2 ? parts[2].split(separator: ",").map(String.init) : []
+                return (name: parts[1], methods: methods)
+            }
+    }
+
+    /// One exported JavaScript class per Durable Object. The runtime requires
+    /// a real class, with the RPC methods on its prototype; each method
+    /// forwards to the Swift object created by the shim.
+    private func durableObjectClasses(_ objects: [(name: String, methods: [String])]) -> String {
+        guard !objects.isEmpty else {
+            return ""
+        }
+        var source = """
+
+            import { DurableObject as __WorkersSwiftDurableObjectBase } from "cloudflare:workers";
+
+            """
+        for (name, methods) in objects {
+            source += """
+
+                export class \(name) extends __WorkersSwiftDurableObjectBase {
+                  #swift;
+
+                  constructor(ctx, env) {
+                    super(ctx, env);
+                    this.#swift = __workersSwiftDurableObject("\(name)", ctx, env);
+                    this.#swift.catch(() => {});
+                  }
+
+                  async fetch(request) {
+                    return (await this.#swift).fetch(request);
+                  }
+
+                  async alarm() {
+                    return (await this.#swift).alarm();
+                  }
+
+                """
+            for method in methods {
+                source += """
+
+                      async \(method)(...args) {
+                        return (await this.#swift).rpc("\(method)", args);
+                      }
+
+                    """
+            }
+            source += "}\n"
+        }
+        return source
+    }
+
+    /// The export names of a WebAssembly module (section 7 of the binary format).
+    private func wasmExportNames(_ bytes: [UInt8]) throws -> [String] {
+        var offset = 8
+        guard bytes.count >= offset, bytes[0..<4] == [0x00, 0x61, 0x73, 0x6D] else {
+            throw WorkerBuildError("the built module is not WebAssembly")
+        }
+
+        func leb128() throws -> Int {
+            var result = 0
+            var shift = 0
+            while true {
+                guard offset < bytes.count, shift < 35 else {
+                    throw WorkerBuildError("malformed WebAssembly module")
+                }
+                let byte = bytes[offset]
+                offset += 1
+                result |= Int(byte & 0x7F) << shift
+                if byte & 0x80 == 0 {
+                    return result
+                }
+                shift += 7
+            }
+        }
+
+        while offset < bytes.count {
+            let sectionID = bytes[offset]
+            offset += 1
+            let size = try leb128()
+            let end = offset + size
+            guard end <= bytes.count else {
+                throw WorkerBuildError("malformed WebAssembly module")
+            }
+            guard sectionID == 7 else {
+                offset = end
+                continue
+            }
+
+            var names: [String] = []
+            for _ in 0..<(try leb128()) {
+                let length = try leb128()
+                guard offset + length <= end else {
+                    throw WorkerBuildError("malformed WebAssembly export section")
+                }
+                names.append(String(decoding: bytes[offset..<(offset + length)], as: UTF8.self))
+                offset += length + 1 // the name, then the export kind
+                _ = try leb128() // the export index
+            }
+            return names
+        }
+        return []
     }
 
     @discardableResult

@@ -1,5 +1,6 @@
 // Starts workerd or celld serving a worker.mjs + one .wasm module from a
-// temporary directory, with plain-text variables as env bindings.
+// temporary directory, with plain-text variables and Durable Object
+// namespaces as env bindings.
 //
 //   E2E_RUNTIMES  comma-separated runtimes to run (default "workerd").
 //                 "celld" needs a `celld` binary on PATH (or CELLD_BIN).
@@ -30,9 +31,15 @@ function freePort() {
 }
 
 const launchers = {
-  async workerd(directory, port, wasmName, vars) {
-    const bindings = Object.entries(vars)
-      .map(([name, value]) => `(name = ${JSON.stringify(name)}, text = ${JSON.stringify(value)})`)
+  async workerd(directory, port, wasmName, { vars, durableObjects }) {
+    const bindings = [
+      ...Object.entries(vars)
+        .map(([name, value]) => `(name = ${JSON.stringify(name)}, text = ${JSON.stringify(value)})`),
+      ...Object.entries(durableObjects)
+        .map(([name, className]) => `(name = ${JSON.stringify(name)}, durableObjectNamespace = ${JSON.stringify(className)})`),
+    ].join(", ");
+    const namespaces = Object.values(durableObjects)
+      .map((className) => `(className = ${JSON.stringify(className)}, uniqueKey = "workers-swift-e2e-${className}")`)
       .join(", ");
     await writeFile(join(directory, "config.capnp"), `
 using Workerd = import "/workerd/workerd.capnp";
@@ -48,6 +55,8 @@ const worker :Workerd.Worker = (
     (name = "${wasmName}", wasm = embed "${wasmName}"),
   ],
   bindings = [${bindings}],
+  durableObjectNamespaces = [${namespaces}],
+  durableObjectStorage = (inMemory = void),
   compatibilityDate = "2026-01-01",
 );
 `);
@@ -55,13 +64,18 @@ const worker :Workerd.Worker = (
     return [binary, ["serve", join(directory, "config.capnp")]];
   },
 
-  async celld(directory, port, _wasmName, vars) {
+  async celld(directory, port, _wasmName, { vars, durableObjects }) {
+    const classNames = [...new Set(Object.values(durableObjects))];
     await writeFile(join(directory, "wrangler.jsonc"), JSON.stringify({
       name: "workers-swift-e2e",
       main: "worker.mjs",
       no_bundle: true,
       compatibility_date: "2026-01-01",
       vars,
+      durable_objects: {
+        bindings: Object.entries(durableObjects).map(([name, className]) => ({ name, class_name: className })),
+      },
+      migrations: classNames.length ? [{ tag: "v1", new_sqlite_classes: classNames }] : [],
     }, null, 2));
     const binary = process.env.CELLD_BIN ?? "celld";
     return [binary, ["dev", directory, "--port", String(port), "--logs"]];
@@ -69,9 +83,9 @@ const worker :Workerd.Worker = (
 };
 
 /// Serves `files` ({ "worker.mjs": source, [wasmName]: bytes }) with
-/// `runtime`, binding `vars` as plain-text env variables, and resolves once it
-/// answers HTTP.
-export async function serve(runtime, files, wasmName, vars = {}) {
+/// `runtime` and resolves once it answers HTTP. `vars` are plain-text env
+/// variables; `durableObjects` maps binding names to Durable Object classes.
+export async function serve(runtime, files, wasmName, { vars = {}, durableObjects = {} } = {}) {
   const launch = launchers[runtime];
   if (!launch) {
     throw new Error(`unknown runtime ${runtime}`);
@@ -83,7 +97,7 @@ export async function serve(runtime, files, wasmName, vars = {}) {
   }
 
   const port = await freePort();
-  const [command, args] = await launch(directory, port, wasmName, vars);
+  const [command, args] = await launch(directory, port, wasmName, { vars, durableObjects });
   const child = spawn(command, args, { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
   const output = [];
   child.stdout.on("data", (chunk) => output.push(chunk.toString()));

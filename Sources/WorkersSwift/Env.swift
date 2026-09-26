@@ -18,4 +18,10 @@ public final class Env: @unchecked Sendable {
     public func secret(_ name: String) -> String? {
         jsObject[name].string
     }
+
+    /// A Durable Object namespace binding, such as `durable_objects.bindings`
+    /// in wrangler.jsonc.
+    public func durableObject(_ name: String) -> DurableObjectNamespace {
+        DurableObjectNamespace(jsObject[name].object!)
+    }
 }

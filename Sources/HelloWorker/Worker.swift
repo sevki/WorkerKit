@@ -47,6 +47,17 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         }
         return .ok("logged")
 
+    case ("GET", "/counter/increment"):
+        // Durable Object RPC: calls Counter.increment(by:) on the object named
+        // "e2e".
+        let count = try await env.durableObject("COUNTER").get(named: "e2e").call("increment", 1, as: Int.self)
+        return .ok(String(count))
+
+    case ("GET", "/counter"):
+        // Durable Object fetch: forwards to Counter.fetch(_:).
+        let response = try await env.durableObject("COUNTER").get(named: "e2e").fetch("https://counter/")
+        return .text(try await response.text(), status: response.status)
+
     case ("GET", "/no-content"):
         return .empty()
 
@@ -56,5 +67,25 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
 
     default:
         return .error("Not Found", 404)
+    }
+}
+
+/// A Durable Object that counts in its storage.
+@DurableObject
+final class Counter {
+    let state: DurableObjectState
+
+    init(state: DurableObjectState, env: Env) {
+        self.state = state
+    }
+
+    func fetch(_ req: Request) async throws -> Response {
+        .ok(String(try await state.storage.get("count", as: Int.self) ?? 0))
+    }
+
+    @RPC func increment(by amount: Int) async throws -> Int {
+        let count = (try await state.storage.get("count", as: Int.self) ?? 0) + amount
+        try await state.storage.put("count", count)
+        return count
     }
 }

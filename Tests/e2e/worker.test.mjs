@@ -30,7 +30,10 @@ for (const runtime of runtimes) {
       server = await serve(runtime, {
         "worker.mjs": await readFile(join(workerDirectory, "worker.mjs")),
         "WorkersSwift.wasm": await readFile(join(workerDirectory, "WorkersSwift.wasm")),
-      }, "WorkersSwift.wasm", { GREETING: "hello from env" });
+      }, "WorkersSwift.wasm", {
+        vars: { GREETING: "hello from env" },
+        durableObjects: { COUNTER: "Counter" },
+      });
     });
 
     after(async () => {
@@ -117,6 +120,20 @@ for (const runtime of runtimes) {
       const output = server.output.join("");
       assert.match(output, /split: café done/);
       assert.doesNotMatch(output, /split: caf\n/);
+    });
+
+    test("Durable Object RPC and fetch share the object's storage", async () => {
+      const first = await request("/counter/increment");
+      assertNotCrashed(first, "/counter/increment");
+      assert.equal(first.body, "1");
+
+      const second = await request("/counter/increment");
+      assert.equal(second.body, "2");
+
+      const current = await request("/counter");
+      assertNotCrashed(current, "/counter");
+      assert.equal(current.response.status, 200);
+      assert.equal(current.body, "2");
     });
 
     test("concurrent async requests each complete", async () => {

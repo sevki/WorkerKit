@@ -3,7 +3,11 @@ import SwiftSyntaxMacrosTestSupport
 import WorkersSwiftMacros
 import XCTest
 
-private let macros: [String: any Macro.Type] = ["Event": EventMacro.self]
+private let macros: [String: any Macro.Type] = [
+    "Event": EventMacro.self,
+    "DurableObject": DurableObjectMacro.self,
+    "RPC": RPCMacro.self,
+]
 
 final class EventMacroTests: XCTestCase {
     func testAsyncThrowingFetchRegistersHandler() {
@@ -119,6 +123,116 @@ final class EventMacroTests: XCTestCase {
             """,
             diagnostics: [
                 DiagnosticSpec(message: "@Event can only be attached to a function", line: 1, column: 1),
+            ],
+            macros: macros
+        )
+    }
+
+    func testDurableObjectWithoutRPCMethods() {
+        assertMacroExpansion(
+            """
+            @DurableObject
+            final class Room {
+                init(state: DurableObjectState, env: Env) {
+                }
+            }
+            """,
+            expandedSource: """
+            final class Room {
+                init(state: DurableObjectState, env: Env) {
+                }
+            }
+
+            #if arch(wasm32)
+            @_expose(wasm, "workers_do:Room")
+            #endif
+            @_cdecl("__workersSwift_do_Room")
+            public func __workersSwift_do_Room() {
+                WorkersRuntime.registerDurableObject(Room.self, name: "Room", rpc: [:])
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    func testDurableObjectListsRPCMethodsInExportName() {
+        assertMacroExpansion(
+            """
+            @DurableObject
+            final class Counter {
+                @RPC func increment(by amount: Int) async throws -> Int {
+                    amount
+                }
+
+                @RPC func reset() {
+                }
+
+                func helper() {
+                }
+            }
+            """,
+            expandedSource: """
+            final class Counter {
+                func increment(by amount: Int) async throws -> Int {
+                    amount
+                }
+                func reset() {
+                }
+
+                func helper() {
+                }
+            }
+
+            #if arch(wasm32)
+            @_expose(wasm, "workers_do:Counter:increment,reset")
+            #endif
+            @_cdecl("__workersSwift_do_Counter")
+            public func __workersSwift_do_Counter() {
+                WorkersRuntime.registerDurableObject(Counter.self, name: "Counter", rpc: [
+                        "increment": { object, arguments in
+                            return try await object.increment(by: WorkersRuntime.rpcArgument(arguments, 0, as: Int.self)).jsValue
+                        },
+                        "reset": { object, arguments in
+                            object.reset();
+                            return .undefined
+                        },
+                    ])
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    func testDurableObjectRejectsNonClasses() {
+        assertMacroExpansion(
+            """
+            @DurableObject
+            struct Counter {
+            }
+            """,
+            expandedSource: """
+            struct Counter {
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(message: "@DurableObject can only be attached to a class", line: 1, column: 1),
+            ],
+            macros: macros
+        )
+    }
+
+    func testRPCRejectsStaticMethods() {
+        assertMacroExpansion(
+            """
+            @RPC static func make() {
+            }
+            """,
+            expandedSource: """
+            static func make() {
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(message: "@RPC methods must be instance methods", line: 1, column: 1),
             ],
             macros: macros
         )

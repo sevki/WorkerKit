@@ -18,3 +18,19 @@ public enum WorkerEvent {
 /// `@Event(.fetch)` function.
 @attached(peer, names: named(__workersSwift_main))
 public macro Event(_ event: WorkerEvent) = #externalMacro(module: "WorkersSwiftMacros", type: "EventMacro")
+
+/// Makes a top-level class a Durable Object, like workers-rs'
+/// `#[durable_object]`. The class conforms to `DurableObject`; mark the
+/// methods other workers may call through `DurableObjectStub.call` with
+/// `@RPC`. Bind it under its class name, as in wrangler.jsonc:
+///
+///     "durable_objects": { "bindings": [{ "name": "COUNTER", "class_name": "Counter" }] }
+@attached(peer, names: prefixed(__workersSwift_do_))
+@attached(extension, conformances: DurableObject)
+public macro DurableObject() = #externalMacro(module: "WorkersSwiftMacros", type: "DurableObjectMacro")
+
+/// Makes a Durable Object method callable through `DurableObjectStub.call`.
+/// Arguments and results convert through JavaScriptKit's
+/// `ConstructibleFromJSValue` and `ConvertibleToJSValue`.
+@attached(peer)
+public macro RPC() = #externalMacro(module: "WorkersSwiftMacros", type: "RPCMacro")

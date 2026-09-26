@@ -121,29 +121,48 @@ async function start() {
   // its static constructors through `_initialize` before any other export.
   instance.exports._initialize?.();
   swift.setInstance(instance);
-  // Registers globalThis.__workersSwiftFetch (see WorkersRuntime.registerFetch).
-  // A reactor module does not export `main`, so SwiftRuntime.main() would not
-  // reach Swift; `@Event(.fetch)` generates this export instead.
-  if (typeof instance.exports.workers_js_main !== "function") {
-    throw new Error("The Swift worker does not export workers_js_main");
-  }
-  instance.exports.workers_js_main();
 
-  if (typeof globalThis.__workersSwiftFetch !== "function") {
-    throw new Error("The Swift worker did not register a fetch handler");
+  // A reactor module does not export `main`, so SwiftRuntime.main() would not
+  // reach Swift. Instead, `@Event(.fetch)` generates `workers_js_main`, which
+  // registers globalThis.__workersSwiftFetch, and each `@DurableObject` class
+  // generates a `workers_do:<Class>` export, which registers its factory in
+  // globalThis.__workersSwiftDurableObjects.
+  instance.exports.workers_js_main?.();
+  for (const [name, value] of Object.entries(instance.exports)) {
+    if (name.startsWith("workers_do:") && typeof value === "function") {
+      value();
+    }
   }
-  return globalThis.__workersSwiftFetch;
 }
 
-let handlerPromise;
+let started;
+
+function ensureStarted() {
+  started ??= start().catch((error) => {
+    started = undefined;
+    throw error;
+  });
+  return started;
+}
+
+// Called by the Durable Object classes that `worker-build` appends to this
+// module: creates the Swift object and returns its fetch/alarm/rpc entry points.
+async function __workersSwiftDurableObject(name, ctx, env) {
+  await ensureStarted();
+  const factory = globalThis.__workersSwiftDurableObjects?.[name];
+  if (typeof factory !== "function") {
+    throw new Error(`The Swift worker has no @DurableObject class ${name}`);
+  }
+  return factory(ctx, env);
+}
 
 export default {
   async fetch(request, env, ctx) {
-    handlerPromise ??= start().catch((error) => {
-      handlerPromise = undefined;
-      throw error;
-    });
-    const handler = await handlerPromise;
+    await ensureStarted();
+    const handler = globalThis.__workersSwiftFetch;
+    if (typeof handler !== "function") {
+      throw new Error("The Swift worker has no @Event(.fetch) function");
+    }
     return handler(request, env, ctx);
   },
 };

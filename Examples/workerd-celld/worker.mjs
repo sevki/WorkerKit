@@ -64,15 +64,18 @@ function createWasiImports(getMemory) {
         return WASI_EBADF;
       }
 
+      // The iovecs form one byte stream: a UTF-8 sequence may span two.
       const memory = view();
+      const streamDecoder = new TextDecoder();
       let text = "";
       let written = 0;
       for (let index = 0; index < iovsLength; index += 1) {
         const pointer = memory.getUint32(iovs + index * 8, true);
         const length = memory.getUint32(iovs + index * 8 + 4, true);
-        text += decoder.decode(bytes().subarray(pointer, pointer + length));
+        text += streamDecoder.decode(bytes().subarray(pointer, pointer + length), { stream: true });
         written += length;
       }
+      text += streamDecoder.decode();
       (fd === 1 ? console.log : console.error)(text.replace(/\n$/, ""));
       memory.setUint32(writtenPointer, written, true);
       return WASI_ESUCCESS;

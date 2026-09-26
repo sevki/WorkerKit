@@ -81,6 +81,16 @@ for (const runtime of runtimes) {
       assert.equal(body, "Not Found");
     });
 
+    // Only workerd is known to print worker console output to its own stdout.
+    test("fd_write decodes iovecs as one UTF-8 stream", { skip: runtime !== "workerd" }, async () => {
+      await request("/health");
+      const deadline = Date.now() + 5_000;
+      while (!output.join("").includes("split:") && Date.now() < deadline) {
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+      }
+      assert.match(output.join(""), /split: café\n/);
+    });
+
     test("concurrent requests each get their own response", async () => {
       const paths = Array.from({ length: 40 }, (_, index) => (index % 2 ? "/health" : "/missing"));
       const results = await Promise.all(paths.map((path) => request(path)));

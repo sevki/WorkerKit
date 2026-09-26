@@ -22,6 +22,9 @@
   (data (i32.const 96) "get")
   (data (i32.const 112) "/health")
   (data (i32.const 128) "fixture initialized\n")
+  ;; "split: café\n" with the two bytes of "é" in separate iovecs.
+  (data (i32.const 240) "split: caf\c3")
+  (data (i32.const 256) "\a9\n")
   ;; 39 bytes: "content-type\0text/plain; charset=utf-8\0"
   (data (i32.const 160) "content-type\00text/plain; charset=utf-8\00")
 
@@ -39,6 +42,12 @@
     (i32.store (i32.const 0) (i32.const 128))
     (i32.store (i32.const 4) (i32.const 20))
     (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))
+    ;; iovecs at 1008: { 240, 11 }, { 256, 2 }.
+    (i32.store (i32.const 1008) (i32.const 240))
+    (i32.store (i32.const 1012) (i32.const 11))
+    (i32.store (i32.const 1016) (i32.const 256))
+    (i32.store (i32.const 1020) (i32.const 2))
+    (drop (call $fd_write (i32.const 1) (i32.const 1008) (i32.const 2) (i32.const 8)))
     (drop (call $random_get (i32.const 12) (i32.const 4)))
     ;; More than getRandomValues' 65,536-byte quota: the shim must chunk it.
     (if (call $random_get (i32.const 20000) (i32.const 70000))

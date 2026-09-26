@@ -79,8 +79,12 @@ async function start() {
 
   instance.exports._initialize?.();
   swift.setInstance(instance);
-  // Runs the Swift @main, which registers globalThis.__workersSwiftFetch.
-  swift.main();
+  // Registers globalThis.__workersSwiftFetch. A reactor module does not
+  // export `main`, so call the worker's own entry point.
+  if (typeof instance.exports.workers_js_main !== "function") {
+    throw new Error("The Swift worker does not export workers_js_main");
+  }
+  instance.exports.workers_js_main();
 
   if (typeof globalThis.__workersSwiftFetch !== "function") {
     throw new Error("The Swift worker did not register a fetch handler");

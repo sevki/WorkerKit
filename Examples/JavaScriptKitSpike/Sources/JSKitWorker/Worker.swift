@@ -1,11 +1,19 @@
 import JavaScriptEventLoop
 import JavaScriptKit
 
-/// Runs once when the shim instantiates the module: installs the Swift
-/// concurrency executor on the JavaScript event loop and registers the fetch
-/// handler that the shim calls with the runtime's own `Request`.
+/// A reactor module does not export `main`, so SwiftRuntime.main() would do
+/// nothing. The shim calls this export instead, once per isolate.
+@_expose(wasm, "workers_js_main")
+@_cdecl("workers_js_main")
+public func workersJSMain() {
+    JSKitWorker.main()
+}
+
 @main
 enum JSKitWorker {
+    /// Installs the Swift concurrency executor on the JavaScript event loop
+    /// and registers the fetch handler that the shim calls with the runtime's
+    /// own `Request`.
     static func main() {
         JavaScriptEventLoop.installGlobalExecutor()
 

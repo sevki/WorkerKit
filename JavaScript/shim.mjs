@@ -56,12 +56,20 @@ function flushConsole() {
   streams[2].flush();
 }
 
-// Runs `call` and then logs any output it left without a final newline.
+// Runs `call`, then logs output left without a final newline once no other
+// call is still running: an overlapping request may be mid-way through the
+// same line.
+let callsInFlight = 0;
+
 async function flushingConsole(call) {
+  callsInFlight += 1;
   try {
     return await call();
   } finally {
-    flushConsole();
+    callsInFlight -= 1;
+    if (callsInFlight === 0) {
+      flushConsole();
+    }
   }
 }
 

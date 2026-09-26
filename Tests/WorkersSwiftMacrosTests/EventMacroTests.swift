@@ -62,7 +62,11 @@ final class EventMacroTests: XCTestCase {
                 _ pathLength: Int32
             ) -> Int32 {
                 WorkersRuntime.handleRequest(methodPointer, methodLength, pathPointer, pathLength) { request in
-                    do { return try handle(request: request) } catch { return WorkerResponse(status: 500, body: "Internal Server Error") }
+                    do {
+                        return try handle(request: request)
+                    } catch {
+                        return WorkerResponse(status: 500, body: "Internal Server Error")
+                    }
                 }
             }
             """,

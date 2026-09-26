@@ -61,8 +61,9 @@ struct WorkerBuild: CommandPlugin {
         if sdk.hasSuffix("-embedded") {
             // Embedded Swift keeps String's Unicode tables (comparison,
             // hashing, case mapping) in a library that must be linked
-            // explicitly.
-            buildArguments += ["-Xlinker", "-lswiftUnicodeDataTables"]
+            // explicitly. Unlike -Xlinker, -Xswiftc flags reach only the Wasm
+            // targets, not host tools such as the @Event macro plugin.
+            buildArguments += ["-Xswiftc", "-Xclang-linker", "-Xswiftc", "-lswiftUnicodeDataTables"]
         }
 
         print("worker-build: building \(product) with Swift SDK \(sdk) (\(configuration))")

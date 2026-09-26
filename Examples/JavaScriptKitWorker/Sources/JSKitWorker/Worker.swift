@@ -1,32 +1,25 @@
 import JavaScriptEventLoop
 import JavaScriptKit
 
-/// A reactor module does not export `main`, so SwiftRuntime.main() would do
-/// nothing. The shim calls this export instead, once per isolate.
+/// The shim calls this once per isolate, right after instantiating the module:
+/// it installs the Swift concurrency executor on the JavaScript event loop and
+/// registers the fetch handler that the shim calls with the runtime's own
+/// `Request`. (A reactor module does not export `main`, so SwiftRuntime.main()
+/// would never reach Swift code.)
 @_expose(wasm, "workers_js_main")
 @_cdecl("workers_js_main")
 public func workersJSMain() {
-    JSKitWorker.main()
-}
+    JavaScriptEventLoop.installGlobalExecutor()
 
-@main
-enum JSKitWorker {
-    /// Installs the Swift concurrency executor on the JavaScript event loop
-    /// and registers the fetch handler that the shim calls with the runtime's
-    /// own `Request`.
-    static func main() {
-        JavaScriptEventLoop.installGlobalExecutor()
-
-        let fetch = JSClosure { arguments in
-            guard let request = arguments.first?.object else {
-                return JSPromise.reject("fetch called without a Request").jsValue
-            }
-            return JSPromise.async { () async throws(JSException) -> JSValue in
-                try await handle(request)
-            }.jsValue
+    let fetch = JSClosure { arguments in
+        guard let request = arguments.first?.object else {
+            return JSPromise.reject("fetch called without a Request").jsValue
         }
-        JSObject.global.__workersSwiftFetch = .object(fetch)
+        return JSPromise.async { () async throws(JSException) -> JSValue in
+            try await handle(request)
+        }.jsValue
     }
+    JSObject.global.__workersSwiftFetch = .object(fetch)
 }
 
 func handle(_ request: JSObject) async throws(JSException) -> JSValue {

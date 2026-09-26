@@ -449,4 +449,25 @@ final class EventMacroTests: XCTestCase {
             macros: macros
         )
     }
+
+    func testTopLevelRPCRejectsDefaultArguments() {
+        assertMacroExpansion(
+            """
+            @RPC func greet(_ name: String = "world") {
+            }
+            """,
+            expandedSource: """
+            func greet(_ name: String = "world") {
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@RPC method greet has a default argument, which RPC cannot apply to an omitted argument; declare the parameter as an optional instead",
+                    line: 1,
+                    column: 1
+                ),
+            ],
+            macros: macros
+        )
+    }
 }

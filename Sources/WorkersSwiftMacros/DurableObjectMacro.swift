@@ -177,6 +177,9 @@ func unsupportedRPCParameter(_ method: FunctionDeclSyntax) -> String? {
         if parameter.ellipsis != nil {
             return "@RPC method \(method.name.text) has a variadic parameter; take an array instead"
         }
+        if parameter.defaultValue != nil {
+            return "@RPC method \(method.name.text) has a default argument, which RPC cannot apply to an omitted argument; declare the parameter as an optional instead"
+        }
         if let attributed = parameter.type.as(AttributedTypeSyntax.self),
            attributed.specifiers.contains(where: { $0.trimmedDescription == "inout" }) {
             return "@RPC method \(method.name.text) has an inout parameter, which RPC cannot pass back"

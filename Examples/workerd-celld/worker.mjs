@@ -42,7 +42,11 @@ function createWasiImports(getMemory) {
       return WASI_ESUCCESS;
     },
     random_get(pointer, length) {
-      crypto.getRandomValues(bytes().subarray(pointer, pointer + length));
+      // getRandomValues fills at most 65,536 bytes per call; WASI allows more.
+      for (let offset = 0; offset < length; offset += 65_536) {
+        const end = Math.min(offset + 65_536, length);
+        crypto.getRandomValues(bytes().subarray(pointer + offset, pointer + end));
+      }
       return WASI_ESUCCESS;
     },
     fd_write(fd, iovs, iovsLength, writtenPointer) {

@@ -45,6 +45,20 @@ jobs:
           path: build/worker
           if-no-files-found: error
 
+  macos:
+    name: Swift tests (macOS)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select the newest Xcode
+        run: |
+          xcode=$(ls -d /Applications/Xcode_*.app | sort -V | tail -n 1)
+          sudo xcode-select -s "$xcode"
+          swift --version
+
+      - run: swift test
+
   e2e:
     name: End-to-end (${{ matrix.wasm }})
     needs: swift

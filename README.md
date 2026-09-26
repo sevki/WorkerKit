@@ -30,7 +30,7 @@ func fetch(_ request: WorkerRequest) -> WorkerResponse {
 }
 ```
 
-The macro generates the `workers_handle_request` export that the JavaScript shim calls for each request, so a module has exactly one `@Event(.fetch)` function. The function may `throw`; an error becomes a `500 Internal Server Error` response. `async` handlers are not supported yet.
+The macro generates the `workers_handle_request` export that the JavaScript shim calls for each request, so a module has exactly one `@Event(.fetch)` function. The function may `throw`; an error becomes a `500 Internal Server Error` response. Response headers are forwarded to the JavaScript `Response`; a status outside 200–599 (which `Response` rejects) becomes a 500. `async` handlers are not supported yet.
 
 ## Native development
 
@@ -69,6 +69,8 @@ The JavaScript shim expects these WebAssembly exports:
 - `workers_response_status`
 - `workers_response_body_len`
 - `workers_response_body_copy`
+- `workers_response_headers_len`
+- `workers_response_headers_copy` (headers as `name\0value\0` pairs)
 - `workers_response_release`
 - `memory`
 - `_initialize` (called once before any other export, as a WASI reactor requires)

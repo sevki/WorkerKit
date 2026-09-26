@@ -20,6 +20,8 @@
   (data (i32.const 96) "get")
   (data (i32.const 112) "/health")
   (data (i32.const 128) "fixture initialized\n")
+  ;; 39 bytes: "content-type\0text/plain; charset=utf-8\0"
+  (data (i32.const 160) "content-type\00text/plain; charset=utf-8\00")
 
   (global $ready (mut i32) (i32.const 0))
   (global $heap (mut i32) (i32.const 4096))
@@ -117,5 +119,11 @@
     (memory.copy (local.get $destination)
                  (i32.load offset=4 (local.get $slot))
                  (i32.load offset=8 (local.get $slot))))
+
+  (func (export "workers_response_headers_len") (param i32) (result i32)
+    (i32.const 39))
+
+  (func (export "workers_response_headers_copy") (param i32) (param $destination i32)
+    (memory.copy (local.get $destination) (i32.const 160) (i32.const 39)))
 
   (func (export "workers_response_release") (param i32)))

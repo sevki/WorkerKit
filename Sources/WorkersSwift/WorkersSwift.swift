@@ -72,7 +72,29 @@ public enum WorkersRuntime {
 
 private struct StoredWasmResponse: Sendable {
     let status: Int32
+    /// Header pairs encoded as `name\0value\0`; NUL cannot appear in a
+    /// valid header name or value.
+    let headers: [UInt8]
     let body: [UInt8]
+
+    static func error(_ message: String) -> StoredWasmResponse {
+        StoredWasmResponse(
+            status: 500,
+            headers: encodeHeaders(["content-type": "text/plain; charset=utf-8"]),
+            body: Array(message.utf8)
+        )
+    }
+}
+
+func encodeHeaders(_ headers: [String: String]) -> [UInt8] {
+    var bytes: [UInt8] = []
+    for (name, value) in headers {
+        bytes += name.utf8
+        bytes.append(0)
+        bytes += value.utf8
+        bytes.append(0)
+    }
+    return bytes
 }
 
 private struct WasmAllocation: Sendable {
@@ -119,25 +141,22 @@ enum WasmResponseStore {
         return next > 0 ? next : 1
     }
 
+    /// The statuses the Fetch `Response` constructor accepts.
+    static let validStatuses: ClosedRange<Int> = 200...599
+
     static func store(_ response: WorkerResponse) -> Int32 {
-        let responseBytes = Array(response.body.utf8)
+        let body = Array(response.body.utf8)
+        let headers = encodeHeaders(response.headers)
         let storedResponse: StoredWasmResponse
 
-        if responseBytes.count > Int(Int32.max) {
-            storedResponse = StoredWasmResponse(
-                status: 500,
-                body: Array("Response body too large for ABI".utf8)
-            )
-        } else if let status = Int32(exactly: response.status) {
-            storedResponse = StoredWasmResponse(
-                status: status,
-                body: responseBytes
-            )
+        if body.count > Int(Int32.max) || headers.count > Int(Int32.max) {
+            storedResponse = .error("Response too large for ABI")
+        } else if !validStatuses.contains(response.status) {
+            storedResponse = .error("Response status out of range for ABI")
+        } else if response.headers.contains(where: { $0.key.utf8.contains(0) || $0.value.utf8.contains(0) }) {
+            storedResponse = .error("Response header contains NUL")
         } else {
-            storedResponse = StoredWasmResponse(
-                status: 500,
-                body: Array("Response status out of range for ABI".utf8)
-            )
+            storedResponse = StoredWasmResponse(status: Int32(response.status), headers: headers, body: body)
         }
 
         return state.withLock { state in
@@ -158,18 +177,25 @@ enum WasmResponseStore {
     }
 
     static func copyBody(for handle: Int32, to destination: UnsafeMutableRawPointer?) {
-        guard let destination else {
+        copy(state.withLock { $0.responses[handle]?.body ?? [] }, to: destination)
+    }
+
+    static func headersLength(for handle: Int32) -> Int32 {
+        let count = state.withLock { $0.responses[handle]?.headers.count ?? 0 }
+        return Int32(exactly: count) ?? Int32.max
+    }
+
+    static func copyHeaders(for handle: Int32, to destination: UnsafeMutableRawPointer?) {
+        copy(state.withLock { $0.responses[handle]?.headers ?? [] }, to: destination)
+    }
+
+    private static func copy(_ bytes: [UInt8], to destination: UnsafeMutableRawPointer?) {
+        guard let destination, !bytes.isEmpty else {
             return
         }
 
-        let body = state.withLock { $0.responses[handle]?.body ?? [] }
-
-        guard !body.isEmpty else {
-            return
-        }
-
-        body.withUnsafeBytes { bytes in
-            destination.copyMemory(from: bytes.baseAddress!, byteCount: body.count)
+        bytes.withUnsafeBytes { buffer in
+            destination.copyMemory(from: buffer.baseAddress!, byteCount: bytes.count)
         }
     }
 
@@ -267,6 +293,22 @@ public func workers_response_body_len(_ handle: Int32) -> Int32 {
 @_cdecl("workers_response_body_copy")
 public func workers_response_body_copy(_ handle: Int32, _ destination: UnsafeMutableRawPointer?) {
     WasmResponseStore.copyBody(for: handle, to: destination)
+}
+
+#if arch(wasm32)
+@_expose(wasm, "workers_response_headers_len")
+#endif
+@_cdecl("workers_response_headers_len")
+public func workers_response_headers_len(_ handle: Int32) -> Int32 {
+    WasmResponseStore.headersLength(for: handle)
+}
+
+#if arch(wasm32)
+@_expose(wasm, "workers_response_headers_copy")
+#endif
+@_cdecl("workers_response_headers_copy")
+public func workers_response_headers_copy(_ handle: Int32, _ destination: UnsafeMutableRawPointer?) {
+    WasmResponseStore.copyHeaders(for: handle, to: destination)
 }
 
 #if arch(wasm32)

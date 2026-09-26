@@ -125,26 +125,38 @@ function freeString(instance, string) {
   }
 }
 
-function readCopiedString(instance, handle) {
-  const length = instance.exports.workers_response_body_len(handle);
+// Copies a response field out of Swift memory through its `*_len` and
+// `*_copy` exports.
+function readCopiedBytes(instance, handle, field) {
+  const length = instance.exports[`workers_response_${field}_len`](handle);
   if (length === 0) {
-    return "";
+    return new Uint8Array();
   }
   if (length < 0) {
-    throw new Error("Swift Wasm returned an invalid negative response length");
+    throw new Error(`Swift Wasm returned an invalid negative response ${field} length`);
   }
 
   const pointer = instance.exports.workers_alloc(length, WASM_ALIGNMENT);
   if (!pointer) {
-    throw new Error("Swift Wasm allocation failed for response body copy");
+    throw new Error(`Swift Wasm allocation failed for response ${field} copy`);
   }
 
   try {
-    instance.exports.workers_response_body_copy(handle, pointer);
-    return decoder.decode(new Uint8Array(instance.exports.memory.buffer, pointer, length));
+    instance.exports[`workers_response_${field}_copy`](handle, pointer);
+    return new Uint8Array(instance.exports.memory.buffer, pointer, length).slice();
   } finally {
     instance.exports.workers_free(pointer, length, WASM_ALIGNMENT);
   }
+}
+
+// Headers arrive as `name\0value\0` pairs.
+function decodeHeaders(bytes) {
+  const parts = decoder.decode(bytes).split("\0");
+  const headers = new Headers();
+  for (let index = 0; index + 1 < parts.length; index += 2) {
+    headers.append(parts[index], parts[index + 1]);
+  }
+  return headers;
 }
 
 export function createWorkerHandler(source = wasmModule, hostImports = {}) {
@@ -181,14 +193,10 @@ export function createWorkerHandler(source = wasmModule, hostImports = {}) {
           throw new Error("Swift Wasm request bridge rejected malformed input");
         }
         const status = instance.exports.workers_response_status(handle);
-        const body = readCopiedString(instance, handle);
+        const headers = decodeHeaders(readCopiedBytes(instance, handle, "headers"));
+        const body = readCopiedBytes(instance, handle, "body");
 
-        return new Response(body, {
-          status,
-          headers: {
-            "content-type": "text/plain; charset=utf-8",
-          },
-        });
+        return new Response(body, { status, headers });
       } finally {
         freeString(instance, method);
         freeString(instance, path);

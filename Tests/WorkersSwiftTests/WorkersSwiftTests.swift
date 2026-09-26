@@ -170,3 +170,46 @@ import Testing
     #expect(workers_response_body_len(handle) == Int32("PATCH /caf\u{e9}".utf8.count))
     workers_response_release(handle)
 }
+
+private func copiedHeaders(_ handle: Int32) -> [String: String] {
+    let length = Int(workers_response_headers_len(handle))
+    var bytes = [UInt8](repeating: 0, count: length)
+    bytes.withUnsafeMutableBytes { workers_response_headers_copy(handle, $0.baseAddress) }
+
+    let parts = bytes.split(separator: 0, omittingEmptySubsequences: false).map {
+        String(decoding: $0, as: UTF8.self)
+    }
+    var headers: [String: String] = [:]
+    for index in stride(from: 0, to: parts.count - 1, by: 2) {
+        headers[parts[index]] = parts[index + 1]
+    }
+    return headers
+}
+
+@Test func wasmStoreForwardsResponseHeaders() async throws {
+    let handle = WasmResponseStore.store(WorkerResponse(
+        status: 302,
+        headers: ["location": "/next", "cache-control": "no-store"],
+        body: ""
+    ))
+
+    #expect(workers_response_status(handle) == 302)
+    #expect(copiedHeaders(handle) == ["location": "/next", "cache-control": "no-store"])
+    workers_response_release(handle)
+}
+
+@Test(arguments: [0, 101, 199, 600, 1000])
+func wasmStoreRejectsStatusesResponseCannotRepresent(status: Int) async throws {
+    let handle = WasmResponseStore.store(WorkerResponse(status: status, body: "boom"))
+
+    #expect(workers_response_status(handle) == 500)
+    #expect(copiedHeaders(handle) == ["content-type": "text/plain; charset=utf-8"])
+    workers_response_release(handle)
+}
+
+@Test func wasmStoreRejectsHeadersContainingNul() async throws {
+    let handle = WasmResponseStore.store(WorkerResponse(status: 200, headers: ["x-bad": "a\u{0}b"], body: "ok"))
+
+    #expect(workers_response_status(handle) == 500)
+    workers_response_release(handle)
+}

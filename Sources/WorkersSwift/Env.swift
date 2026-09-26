@@ -25,6 +25,11 @@ public final class Env: @unchecked Sendable {
         DurableObjectNamespace(jsObject[name].object!)
     }
 
+    /// A KV namespace binding, such as `kv_namespaces` in wrangler.jsonc.
+    public func kv(_ name: String) -> KVStore {
+        KVStore(jsObject[name].object!)
+    }
+
     /// A service binding, such as `services` in wrangler.jsonc.
     public func service(_ name: String) -> Fetcher {
         Fetcher(jsObject[name].object!)

@@ -22,7 +22,7 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
 
 | workers-rs | workers-swift |
 |---|---|
-| `worker` (`Request`, `Response`, `Env`, `Context`, …) | `WorkersSwift` |
+| `worker` (`Request`, `Response`, `Env`, `Context`, `KvStore`, …) | `WorkersSwift` (`KVStore` for `KvStore`) |
 | `#[event(fetch)]` | `@Event(.fetch)` (`WorkersSwiftMacros`) |
 | `#[durable_object]` + `impl DurableObject` | `@DurableObject` class, with `@RPC` methods |
 | `wasm-bindgen`, `js-sys`, `wasm-bindgen-futures` | [JavaScriptKit](https://github.com/swiftwasm/JavaScriptKit) and JavaScriptEventLoop |
@@ -34,7 +34,20 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
 - A status outside 200–599 or a header that the Fetch `Headers` class would reject becomes a `500` rather than a JavaScript exception, and 204, 205 and 304 are sent without a body.
 - An error thrown by the handler is logged with `console.error` and becomes `500 Internal Server Error`.
 
-`Env` reads plain-text bindings (`env.variable("NAME")`, `env.secret("NAME")`), Durable Object namespaces (`env.durableObject("NAME")`) and service bindings (`env.service("NAME")`), and `Context` exposes `waitUntil` and `passThroughOnException`. Other typed bindings such as KV, R2 and D1 are not wrapped yet.
+`Env` reads plain-text bindings (`env.variable("NAME")`, `env.secret("NAME")`), KV namespaces (`env.kv("NAME")`), Durable Object namespaces (`env.durableObject("NAME")`) and service bindings (`env.service("NAME")`), and `Context` exposes `waitUntil` and `passThroughOnException`. Other typed bindings such as R2 and D1 are not wrapped yet.
+
+## KV
+
+```swift
+let kv = env.kv("CACHE")
+try await kv.put("greeting", "hello", expirationTtl: 3600, metadata: ["by": "swift"] as [String: String])
+let greeting = try await kv.get("greeting")              // String?
+let entry = try await kv.getWithMetadata("greeting")     // (value: String, metadata: JSValue)?
+let page = try await kv.list(prefix: "user/", limit: 100) // keys, listComplete, cursor
+try await kv.delete("greeting")
+```
+
+`KVStore` is workers-rs' `KvStore`. It also reads and writes bytes (`bytes(_:)`, and `put(_:_:)` with a `[UInt8]`). Bind a namespace with `"kv_namespaces": [{ "binding": "CACHE", "id": "…" }]`.
 
 ## Durable Objects and RPC
 

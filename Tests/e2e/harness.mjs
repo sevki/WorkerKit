@@ -1,6 +1,6 @@
 // Starts workerd or celld serving a worker.mjs + one .wasm module from a
-// temporary directory, with plain-text variables and Durable Object
-// namespaces as env bindings.
+// temporary directory, with plain-text variables, Durable Object namespaces
+// and KV namespaces as env bindings.
 //
 //   E2E_RUNTIMES  comma-separated runtimes to run (default "workerd").
 //                 "celld" needs a `celld` binary on PATH (or CELLD_BIN).
@@ -30,15 +30,80 @@ function freePort() {
   });
 }
 
+// workerd sends a KV binding's operations as HTTP requests to a service:
+// GET, PUT and DELETE https://fake-host/<key>?urlencoded=true (metadata in
+// the CF-KV-Metadata header), and GET https://fake-host?prefix=&key_count_limit=&cursor=
+// to list. This worker answers them from memory.
+const kvService = `
+const entries = new Map();
+
+export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/") {
+      const prefix = url.searchParams.get("prefix") ?? "";
+      const limit = Number(url.searchParams.get("key_count_limit") ?? 1000);
+      const start = Number(url.searchParams.get("cursor") || 0);
+      const names = [...entries.keys()].filter((name) => name.startsWith(prefix)).sort();
+      const page = names.slice(start, start + limit);
+      const complete = start + limit >= names.length;
+      return Response.json({
+        keys: page.map((name) => ({ name, ...entries.get(name).listed })),
+        list_complete: complete,
+        ...(complete ? {} : { cursor: String(start + limit) }),
+        cacheStatus: null,
+      });
+    }
+    const key = decodeURIComponent(url.pathname.slice(1));
+    switch (request.method) {
+      case "GET": {
+        const entry = entries.get(key);
+        if (!entry) {
+          return new Response(null, { status: 404 });
+        }
+        const headers = entry.metadata === null ? {} : { "CF-KV-Metadata": entry.metadata };
+        return new Response(entry.value, { headers });
+      }
+      case "PUT": {
+        const metadata = request.headers.get("CF-KV-Metadata");
+        const ttl = url.searchParams.get("expiration_ttl");
+        const expiration = url.searchParams.get("expiration")
+          ?? (ttl === null ? null : String(Math.floor(Date.now() / 1000) + Number(ttl)));
+        entries.set(key, {
+          value: await request.arrayBuffer(),
+          metadata,
+          listed: {
+            ...(expiration === null ? {} : { expiration: Number(expiration) }),
+            ...(metadata === null ? {} : { metadata: JSON.parse(metadata) }),
+          },
+        });
+        return new Response(null);
+      }
+      case "DELETE":
+        entries.delete(key);
+        return new Response(null);
+      default:
+        return new Response(null, { status: 405 });
+    }
+  },
+};
+`;
+
 const launchers = {
-  async workerd(directory, port, wasmName, { vars, durableObjects, selfBinding }) {
+  async workerd(directory, port, wasmName, { vars, durableObjects, kvNamespaces, selfBinding }) {
     const bindings = [
       ...(selfBinding ? [`(name = ${JSON.stringify(selfBinding)}, service = "main")`] : []),
       ...Object.entries(vars)
         .map(([name, value]) => `(name = ${JSON.stringify(name)}, text = ${JSON.stringify(value)})`),
       ...Object.entries(durableObjects)
         .map(([name, className]) => `(name = ${JSON.stringify(name)}, durableObjectNamespace = ${JSON.stringify(className)})`),
+      ...Object.keys(kvNamespaces)
+        .map((name) => `(name = ${JSON.stringify(name)}, kvNamespace = "kv-${name}")`),
     ].join(", ");
+    const kvServices = Object.keys(kvNamespaces)
+      .map((name) => `, (name = "kv-${name}", worker = .kvWorker)`)
+      .join("");
+    await writeFile(join(directory, "kv-service.mjs"), kvService);
     const namespaces = Object.values(durableObjects)
       .map((className) => `(className = ${JSON.stringify(className)}, uniqueKey = "workers-swift-e2e-${className}")`)
       .join(", ");
@@ -46,7 +111,7 @@ const launchers = {
 using Workerd = import "/workerd/workerd.capnp";
 
 const config :Workerd.Config = (
-  services = [(name = "main", worker = .worker)],
+  services = [(name = "main", worker = .worker)${kvServices}],
   sockets = [(name = "http", address = "127.0.0.1:${port}", http = (), service = "main")],
 );
 
@@ -60,12 +125,17 @@ const worker :Workerd.Worker = (
   durableObjectStorage = (inMemory = void),
   compatibilityDate = "2026-01-01",
 );
+
+const kvWorker :Workerd.Worker = (
+  modules = [(name = "kv-service.mjs", esModule = embed "kv-service.mjs")],
+  compatibilityDate = "2026-01-01",
+);
 `);
     const binary = process.env.WORKERD_BIN ?? require("workerd").default;
     return [binary, ["serve", join(directory, "config.capnp")]];
   },
 
-  async celld(directory, port, _wasmName, { vars, durableObjects, selfBinding }) {
+  async celld(directory, port, _wasmName, { vars, durableObjects, kvNamespaces, selfBinding }) {
     const classNames = [...new Set(Object.values(durableObjects))];
     await writeFile(join(directory, "wrangler.jsonc"), JSON.stringify({
       name: "workers-swift-e2e",
@@ -77,6 +147,7 @@ const worker :Workerd.Worker = (
         bindings: Object.entries(durableObjects).map(([name, className]) => ({ name, class_name: className })),
       },
       migrations: classNames.length ? [{ tag: "v1", new_sqlite_classes: classNames }] : [],
+      kv_namespaces: Object.entries(kvNamespaces).map(([binding, id]) => ({ binding, id })),
       services: selfBinding ? [{ binding: selfBinding, service: "workers-swift-e2e" }] : [],
     }, null, 2));
     const binary = process.env.CELLD_BIN ?? "celld";
@@ -87,8 +158,9 @@ const worker :Workerd.Worker = (
 /// Serves `files` ({ "worker.mjs": source, [wasmName]: bytes }) with
 /// `runtime` and resolves once it answers HTTP. `vars` are plain-text env
 /// variables; `durableObjects` maps binding names to Durable Object classes;
+/// `kvNamespaces` maps binding names to KV namespace ids, which start empty;
 /// `selfBinding` names a service binding to the worker itself.
-export async function serve(runtime, files, wasmName, { vars = {}, durableObjects = {}, selfBinding } = {}) {
+export async function serve(runtime, files, wasmName, { vars = {}, durableObjects = {}, kvNamespaces = {}, selfBinding } = {}) {
   const launch = launchers[runtime];
   if (!launch) {
     throw new Error(`unknown runtime ${runtime}`);
@@ -100,7 +172,7 @@ export async function serve(runtime, files, wasmName, { vars = {}, durableObject
   }
 
   const port = await freePort();
-  const [command, args] = await launch(directory, port, wasmName, { vars, durableObjects, selfBinding });
+  const [command, args] = await launch(directory, port, wasmName, { vars, durableObjects, kvNamespaces, selfBinding });
   const child = spawn(command, args, { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
   const output = [];
   child.stdout.on("data", (chunk) => output.push(chunk.toString()));

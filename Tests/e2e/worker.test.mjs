@@ -33,6 +33,7 @@ for (const runtime of runtimes) {
       }, "WorkersSwift.wasm", {
         vars: { GREETING: "hello from env" },
         durableObjects: { COUNTER: "Counter" },
+        kvNamespaces: { KV: "workers-swift-e2e-kv" },
         selfBinding: "SELF",
       });
     });
@@ -151,6 +152,57 @@ for (const runtime of runtimes) {
       assertNotCrashed(current, "/counter");
       assert.equal(current.response.status, 200);
       assert.equal(current.body, "2");
+    });
+
+    test("KV put, getWithMetadata and delete", async () => {
+      const put = await request("/kv/greeting", { method: "PUT", body: "hello kv" });
+      assertNotCrashed(put, "PUT /kv/greeting");
+      assert.equal(put.response.status, 201);
+
+      const get = await request("/kv/greeting");
+      assertNotCrashed(get, "GET /kv/greeting");
+      assert.equal(get.response.status, 200);
+      assert.equal(get.body, "hello kv");
+      assert.deepEqual(JSON.parse(get.response.headers.get("x-metadata")), { by: "swift" });
+
+      const deleted = await request("/kv/greeting", { method: "DELETE" });
+      assertNotCrashed(deleted, "DELETE /kv/greeting");
+      assert.equal(deleted.response.status, 204);
+      assert.equal((await request("/kv/greeting")).response.status, 404);
+    });
+
+    test("KV get of a missing key returns nil", async () => {
+      const result = await request("/kv/missing");
+      assert.equal(result.response.status, 404);
+      assert.equal(result.body, "Not Found");
+    });
+
+    test("KV list pages through keys by prefix", async () => {
+      for (const key of ["list/b", "list/a", "other"]) {
+        assert.equal((await request(`/kv/${key}`, { method: "PUT", body: key })).response.status, 201);
+      }
+
+      const all = await request("/kv?prefix=list/");
+      assertNotCrashed(all, "/kv?prefix=list/");
+      assert.equal(all.body, "list/a,list/b");
+      assert.equal(all.response.headers.get("x-list-complete"), "true");
+
+      const first = await request("/kv?prefix=list/&limit=1");
+      assert.equal(first.body, "list/a");
+      assert.equal(first.response.headers.get("x-list-complete"), "false");
+      const cursor = first.response.headers.get("x-cursor");
+      assert.ok(cursor);
+
+      const second = await request(`/kv?prefix=list/&limit=1&cursor=${encodeURIComponent(cursor)}`);
+      assertNotCrashed(second, "/kv with a cursor");
+      assert.equal(second.body, "list/b");
+    });
+
+    test("KV stores and reads bytes", async () => {
+      const bytes = new Uint8Array([0, 255, 1, 128, 0xc3]);
+      const result = await fetch(`${server.baseURL}/kv-bytes`, { method: "POST", body: bytes });
+      assert.equal(result.status, 200);
+      assert.deepEqual(new Uint8Array(await result.arrayBuffer()), bytes);
     });
 
     test("concurrent async requests each complete", async () => {

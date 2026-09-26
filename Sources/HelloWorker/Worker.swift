@@ -71,6 +71,45 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         let response = try await env.durableObject("COUNTER").get(named: "e2e").fetch("https://counter/")
         return .text(try await response.text(), status: response.status)
 
+    case ("GET", "/kv"):
+        // Lists the KV keys under ?prefix=, a page of ?limit= at a time.
+        let query = JSObject.global.URL.object!.new(req.url).searchParams.object!
+        let page = try await env.kv("KV").list(
+            prefix: query.get!("prefix").string,
+            limit: query.get!("limit").string.flatMap { Int($0) },
+            cursor: query.get!("cursor").string
+        )
+        return Response.ok(page.keys.map(\.name).joined(separator: ","))
+            .withHeader("x-list-complete", String(page.listComplete))
+            .withHeader("x-cursor", page.cursor ?? "")
+
+    case (let method, let path) where path.hasPrefix("/kv/"):
+        // A key-value store over KV: GET, PUT and DELETE /kv/<key>.
+        let key = String(path.dropFirst("/kv/".count))
+        let kv = env.kv("KV")
+        switch method {
+        case "GET":
+            guard let entry = try await kv.getWithMetadata(key) else {
+                return .error("Not Found", 404)
+            }
+            let metadata = JSObject.global.JSON.object!.stringify!(entry.metadata).string ?? "null"
+            return Response.ok(entry.value).withHeader("x-metadata", metadata)
+        case "PUT":
+            try await kv.put(key, try await req.text(), expirationTtl: 3600, metadata: ["by": "swift"] as [String: String])
+            return .empty(status: 201)
+        case "DELETE":
+            try await kv.delete(key)
+            return .empty()
+        default:
+            return .error("Method Not Allowed", 405)
+        }
+
+    case ("POST", "/kv-bytes"):
+        // Stores the request body as bytes and reads it back as bytes.
+        let kv = env.kv("KV")
+        try await kv.put("bytes", try await req.bytes())
+        return Response(status: 200, headers: [], body: try await kv.bytes("bytes") ?? [])
+
     case ("GET", "/no-content"):
         return .empty()
 

@@ -25,7 +25,7 @@ public final class KVStore: @unchecked Sendable {
         let options = JSObject()
         options["type"] = .string("arrayBuffer")
         let buffer = try await awaitValue(jsObject.get!(key, options))
-        guard buffer.isObject else {
+        guard buffer.object != nil else {
             return nil
         }
         let array = JSTypedArray<UInt8>(unsafelyWrapping: JSObject.global.Uint8Array.object!.new(buffer))

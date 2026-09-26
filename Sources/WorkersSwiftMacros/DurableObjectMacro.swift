@@ -34,6 +34,9 @@ public struct DurableObjectMacro: PeerMacro, ExtensionMacro {
                 "@RPC method name \(invalid.name.text) must also be a JavaScript method name (ASCII letters, digits, _ and $)"
             )
         }
+        if let message = rpcMethods.lazy.compactMap(unsupportedRPCParameter).first {
+            throw MacroExpansionErrorMessage(message)
+        }
         // RPC dispatches by name alone, so overloads cannot be told apart
         // (and would be duplicate keys in the generated table).
         var seen = Set<String>()
@@ -121,6 +124,9 @@ public struct RPCMacro: PeerMacro {
                 "@RPC function name \(name) must also be a JavaScript method name (ASCII letters, digits, _ and $)"
             )
         }
+        if let message = unsupportedRPCParameter(function) {
+            throw MacroExpansionErrorMessage(message)
+        }
         // The generated WorkerEntrypoint class defines these itself.
         guard !["constructor", "fetch", "env", "ctx"].contains(name) else {
             throw MacroExpansionErrorMessage("@RPC function \(name) clashes with the WorkerEntrypoint class's own \(name)")
@@ -162,6 +168,21 @@ func rpcCallBody(_ method: FunctionDeclSyntax, receiver: String) -> String {
     return returnType == nil || returnType == "Void" || returnType == "()"
         ? "\(call); return .undefined"
         : "return \(call).jsValue"
+}
+
+/// Why `method` cannot be called over RPC, if it cannot: the generated call
+/// passes one JavaScript argument per parameter, by value.
+func unsupportedRPCParameter(_ method: FunctionDeclSyntax) -> String? {
+    for parameter in method.signature.parameterClause.parameters {
+        if parameter.ellipsis != nil {
+            return "@RPC method \(method.name.text) has a variadic parameter; take an array instead"
+        }
+        if let attributed = parameter.type.as(AttributedTypeSyntax.self),
+           attributed.specifiers.contains(where: { $0.trimmedDescription == "inout" }) {
+            return "@RPC method \(method.name.text) has an inout parameter, which RPC cannot pass back"
+        }
+    }
+    return nil
 }
 
 /// Whether `element` is `@RPC`, including the qualified `@WorkersSwift.RPC`.

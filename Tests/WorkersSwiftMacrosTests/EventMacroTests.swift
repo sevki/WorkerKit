@@ -410,4 +410,43 @@ final class EventMacroTests: XCTestCase {
             macros: macros
         )
     }
+
+    func testDurableObjectRejectsVariadicRPCParameters() {
+        assertMacroExpansion(
+            """
+            @DurableObject
+            final class Adder {
+                @RPC func sum(_ values: Int...) {
+                }
+            }
+            """,
+            expandedSource: """
+            final class Adder {
+                func sum(_ values: Int...) {
+                }
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(message: "@RPC method sum has a variadic parameter; take an array instead", line: 1, column: 1),
+            ],
+            macros: macros
+        )
+    }
+
+    func testTopLevelRPCRejectsInoutParameters() {
+        assertMacroExpansion(
+            """
+            @RPC func bump(_ value: inout Int) {
+            }
+            """,
+            expandedSource: """
+            func bump(_ value: inout Int) {
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(message: "@RPC method bump has an inout parameter, which RPC cannot pass back", line: 1, column: 1),
+            ],
+            macros: macros
+        )
+    }
 }

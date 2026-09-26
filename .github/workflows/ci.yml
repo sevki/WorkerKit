@@ -36,7 +36,7 @@ jobs:
       - name: swift package worker-build
         run: |
           swift package --allow-writing-to-package-directory \
-            worker-build --swift-sdk "$SWIFT_SDK"
+            worker-build --swift-sdk "$SWIFT_SDK" -c release
           ls -l build/worker
 
       - uses: actions/upload-artifact@v4

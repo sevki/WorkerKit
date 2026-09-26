@@ -24,11 +24,23 @@ struct WorkerBuild: CommandPlugin {
     static let wasmName = "WorkersSwift.wasm"
 
     func performCommand(context: PluginContext, arguments: [String]) async throws {
+        // ArgumentExtractor only understands long options, so take the
+        // short `-c <configuration>` out first.
+        var arguments = arguments
+        var shortConfiguration: String?
+        if let index = arguments.firstIndex(of: "-c") {
+            guard index + 1 < arguments.count else {
+                throw WorkerBuildError("-c needs a configuration: debug or release")
+            }
+            shortConfiguration = arguments[index + 1]
+            arguments.removeSubrange(index...(index + 1))
+        }
+
         var extractor = ArgumentExtractor(arguments)
         let requestedSDK = extractor.extractOption(named: "swift-sdk").last
         let requestedProduct = extractor.extractOption(named: "product").last
         let configuration = extractor.extractOption(named: "configuration").last
-            ?? extractor.extractOption(named: "c").last
+            ?? shortConfiguration
             ?? "release"
         let requestedOutput = extractor.extractOption(named: "output").last
         if !extractor.remainingArguments.isEmpty {

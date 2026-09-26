@@ -1,8 +1,13 @@
-// Worker entry for the JavaScriptKit worker. bundle.mjs prepends JavaScriptKit's
-// runtime.mjs (which defines SwiftRuntime) because celld's no_bundle mode
-// takes a single JavaScript file.
-import wasmModule from "./JSKitWorker.wasm";
+// The Worker entry point for a Swift worker. `swift package worker-build`
+// writes it to build/worker/worker.mjs after JavaScriptKit's runtime.mjs
+// (which defines SwiftRuntime), because celld's no_bundle mode takes a single
+// JavaScript file.
+//
+// workerd and celld (like Wrangler) resolve a `.wasm` import to a compiled
+// `WebAssembly.Module`.
+import wasmModule from "./WorkersSwift.wasm";
 
+const WASI_EBADF = 8;
 const WASI_EINVAL = 28;
 const WASI_ENOSYS = 52;
 
@@ -41,6 +46,9 @@ function buildImportObject(module, swift, getMemory) {
       return 0;
     },
     fd_write(fd, iovs, iovsLength, writtenPointer) {
+      if (fd !== 1 && fd !== 2) {
+        return WASI_EBADF;
+      }
       // The iovecs form one byte stream: a UTF-8 sequence may span two.
       const streamDecoder = new TextDecoder();
       let text = "";
@@ -88,10 +96,13 @@ async function start() {
   );
   memory = instance.exports.memory;
 
+  // SwiftPM links the module with `-mexec-model=reactor`; a reactor must run
+  // its static constructors through `_initialize` before any other export.
   instance.exports._initialize?.();
   swift.setInstance(instance);
-  // Registers globalThis.__workersSwiftFetch. A reactor module does not
-  // export `main`, so call the worker's own entry point.
+  // Registers globalThis.__workersSwiftFetch (see WorkersRuntime.registerFetch).
+  // A reactor module does not export `main`, so SwiftRuntime.main() would not
+  // reach Swift; `@Event(.fetch)` generates this export instead.
   if (typeof instance.exports.workers_js_main !== "function") {
     throw new Error("The Swift worker does not export workers_js_main");
   }

@@ -6,31 +6,26 @@ import XCTest
 private let macros: [String: any Macro.Type] = ["Event": EventMacro.self]
 
 final class EventMacroTests: XCTestCase {
-    func testFetchGeneratesRequestExport() {
+    func testAsyncThrowingFetchRegistersHandler() {
         assertMacroExpansion(
             """
             @Event(.fetch)
-            func fetch(_ request: WorkerRequest) -> WorkerResponse {
-                WorkerResponse(status: 200, body: "ok")
+            func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
+                .ok("hi")
             }
             """,
             expandedSource: """
-            func fetch(_ request: WorkerRequest) -> WorkerResponse {
-                WorkerResponse(status: 200, body: "ok")
+            func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
+                .ok("hi")
             }
 
             #if arch(wasm32)
-            @_expose(wasm, "workers_handle_request")
+            @_expose(wasm, "workers_js_main")
             #endif
-            @_cdecl("workers_handle_request")
-            public func __workersSwift_fetch(
-                _ methodPointer: UnsafePointer<UInt8>?,
-                _ methodLength: Int32,
-                _ pathPointer: UnsafePointer<UInt8>?,
-                _ pathLength: Int32
-            ) -> Int32 {
-                WorkersRuntime.handleRequest(methodPointer, methodLength, pathPointer, pathLength) { request in
-                    fetch(request)
+            @_cdecl("workers_js_main")
+            public func __workersSwift_main() {
+                WorkersRuntime.registerFetch { request, env, context in
+                    try await fetch(req: request, env: env, ctx: context)
                 }
             }
             """,
@@ -38,58 +33,29 @@ final class EventMacroTests: XCTestCase {
         )
     }
 
-    func testThrowingHandlerMapsErrorsTo500() {
+    func testSynchronousUnlabeledHandler() {
         assertMacroExpansion(
             """
             @Event(.fetch)
-            func handle(request: WorkerRequest) throws -> WorkerResponse {
-                throw Failure()
+            func handle(_ request: Request, _ env: Env, _ context: Context) -> Response {
+                .ok("hi")
             }
             """,
             expandedSource: """
-            func handle(request: WorkerRequest) throws -> WorkerResponse {
-                throw Failure()
+            func handle(_ request: Request, _ env: Env, _ context: Context) -> Response {
+                .ok("hi")
             }
 
             #if arch(wasm32)
-            @_expose(wasm, "workers_handle_request")
+            @_expose(wasm, "workers_js_main")
             #endif
-            @_cdecl("workers_handle_request")
-            public func __workersSwift_fetch(
-                _ methodPointer: UnsafePointer<UInt8>?,
-                _ methodLength: Int32,
-                _ pathPointer: UnsafePointer<UInt8>?,
-                _ pathLength: Int32
-            ) -> Int32 {
-                WorkersRuntime.handleRequest(methodPointer, methodLength, pathPointer, pathLength) { request in
-                    do {
-                        return try handle(request: request)
-                    } catch {
-                        return WorkerResponse(status: 500, body: "Internal Server Error")
-                    }
+            @_cdecl("workers_js_main")
+            public func __workersSwift_main() {
+                WorkersRuntime.registerFetch { request, env, context in
+                    handle(request, env, context)
                 }
             }
             """,
-            macros: macros
-        )
-    }
-
-    func testRejectsAsyncHandler() {
-        assertMacroExpansion(
-            """
-            @Event(.fetch)
-            func fetch(_ request: WorkerRequest) async -> WorkerResponse {
-                WorkerResponse(status: 200, body: "ok")
-            }
-            """,
-            expandedSource: """
-            func fetch(_ request: WorkerRequest) async -> WorkerResponse {
-                WorkerResponse(status: 200, body: "ok")
-            }
-            """,
-            diagnostics: [
-                DiagnosticSpec(message: "@Event(.fetch) does not support async functions yet", line: 1, column: 1),
-            ],
             macros: macros
         )
     }
@@ -98,18 +64,18 @@ final class EventMacroTests: XCTestCase {
         assertMacroExpansion(
             """
             @Event(.fetch)
-            func fetch() -> WorkerResponse {
-                WorkerResponse(status: 200, body: "ok")
+            func fetch(req: Request) -> Response {
+                .ok("hi")
             }
             """,
             expandedSource: """
-            func fetch() -> WorkerResponse {
-                WorkerResponse(status: 200, body: "ok")
+            func fetch(req: Request) -> Response {
+                .ok("hi")
             }
             """,
             diagnostics: [
                 DiagnosticSpec(
-                    message: "@Event(.fetch) requires a function of type (WorkerRequest) -> WorkerResponse",
+                    message: "@Event(.fetch) requires a function of type (Request, Env, Context) async throws -> Response",
                     line: 1,
                     column: 1
                 ),
@@ -123,15 +89,15 @@ final class EventMacroTests: XCTestCase {
             """
             struct Worker {
                 @Event(.fetch)
-                func fetch(_ request: WorkerRequest) -> WorkerResponse {
-                    WorkerResponse(status: 200, body: "ok")
+                func fetch(req: Request, env: Env, ctx: Context) -> Response {
+                    .ok("hi")
                 }
             }
             """,
             expandedSource: """
             struct Worker {
-                func fetch(_ request: WorkerRequest) -> WorkerResponse {
-                    WorkerResponse(status: 200, body: "ok")
+                func fetch(req: Request, env: Env, ctx: Context) -> Response {
+                    .ok("hi")
                 }
             }
             """,

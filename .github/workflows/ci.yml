@@ -7,18 +7,13 @@ on:
 
 jobs:
   swift:
-    name: Swift tests and Wasm build (${{ matrix.sdk }})
+    name: Swift tests and worker-build
     runs-on: ubuntu-24.04
     container: swift:6.3
-    strategy:
-      fail-fast: false
-      matrix:
-        sdk: [wasm, wasm-embedded]
     steps:
       - uses: actions/checkout@v4
 
       - name: swift test
-        if: matrix.sdk == 'wasm'
         run: swift test
 
       - name: Install the Swift SDK for WebAssembly that matches the toolchain
@@ -31,7 +26,7 @@ jobs:
             "https://download.swift.org/${lower}/wasm-sdk/${tag}/${tag}_wasm.artifactbundle.tar.gz"
           swift sdk install /tmp/wasm-sdk.artifactbundle.tar.gz
           swift sdk list
-          echo "SWIFT_SDK=${tag}_${{ matrix.sdk }}" >> "$GITHUB_ENV"
+          echo "SWIFT_SDK=${tag}_wasm" >> "$GITHUB_ENV"
 
       - name: swift package worker-build
         run: |
@@ -41,7 +36,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: worker-${{ matrix.sdk }}
+          name: worker
           path: build/worker
           if-no-files-found: error
 
@@ -60,14 +55,9 @@ jobs:
       - run: swift test
 
   e2e:
-    name: End-to-end (${{ matrix.wasm }})
+    name: End-to-end (workerd and celld)
     needs: swift
-    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        wasm: [fixture, wasm, wasm-embedded]
     steps:
       - uses: actions/checkout@v4
 
@@ -87,86 +77,12 @@ jobs:
           celld --version
 
       - uses: actions/download-artifact@v4
-        if: matrix.wasm != 'fixture'
         with:
-          name: worker-${{ matrix.wasm }}
+          name: worker
           path: build/worker
 
-      - name: Run worker.mjs in workerd and celld
+      - name: Run the Swift worker in workerd and celld
         env:
           E2E_RUNTIMES: workerd,celld
-        run: |
-          if [ "${{ matrix.wasm }}" != fixture ]; then
-            export WORKERS_SWIFT_WASM="$PWD/build/worker/WorkersSwift.wasm"
-          fi
-          npm run test:e2e
-
-  jskit-build:
-    name: JavaScriptKit worker build
-    runs-on: ubuntu-24.04
-    container: swift:6.3
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install the Swift SDK for WebAssembly that matches the toolchain
-        run: |
-          apt-get update -q && apt-get install -y -q --no-install-recommends curl ca-certificates
-          tag=$(swift --version 2>&1 | grep -o 'swift-[0-9.]*-RELEASE' | head -n 1)
-          test -n "$tag"
-          lower=$(echo "$tag" | tr '[:upper:]' '[:lower:]')
-          curl -fsSL -o /tmp/wasm-sdk.artifactbundle.tar.gz \
-            "https://download.swift.org/${lower}/wasm-sdk/${tag}/${tag}_wasm.artifactbundle.tar.gz"
-          swift sdk install /tmp/wasm-sdk.artifactbundle.tar.gz
-          echo "SWIFT_SDK=${tag}_wasm" >> "$GITHUB_ENV"
-
-      - name: Build JSKitWorker.wasm
-        run: |
-          set -- --package-path Examples/JavaScriptKitWorker --swift-sdk "$SWIFT_SDK" \
-            -c release --product JSKitWorker \
-            -Xswiftc -Xclang-linker -Xswiftc -mexec-model=reactor
-          swift build "$@"
-          bin=$(swift build "$@" --show-bin-path)
-          mkdir -p jskit
-          cp "$bin/JSKitWorker.wasm" jskit/
-          # The JS runtime must match the resolved JavaScriptKit version.
-          cp Examples/JavaScriptKitWorker/.build/checkouts/JavaScriptKit/Plugins/PackageToJS/Templates/runtime.mjs jskit/
-          ls -l jskit
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: jskit
-          path: jskit
-          if-no-files-found: error
-
-  jskit-e2e:
-    name: JavaScriptKit worker end-to-end
-    needs: jskit-build
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci
-
-      - name: Install celld from its release image
-        run: |
-          docker pull ghcr.io/denoland/celld
-          container=$(docker create ghcr.io/denoland/celld)
-          docker cp "$container:/usr/local/bin/celld" /usr/local/bin/celld
-          docker rm "$container"
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: jskit
-          path: jskit-build
-
-      - name: Run the JavaScriptKit worker in workerd and celld
-        env:
-          E2E_RUNTIMES: workerd,celld
-        run: |
-          node Examples/JavaScriptKitWorker/bundle.mjs jskit-build/runtime.mjs jskit-build/JSKitWorker.wasm jskit
-          JSKIT_WORKER_DIR="$PWD/jskit" node --test Tests/e2e/jskit.test.mjs
+          WORKER_DIR: build/worker
+        run: npm run test:e2e

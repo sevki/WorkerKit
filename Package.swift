@@ -4,18 +4,8 @@
 import CompilerPluginSupport
 import PackageDescription
 
-// Embedded Swift keeps String's Unicode tables (comparison, hashing, case
-// mapping) in a separate library. `swift package worker-build` sets
-// WORKERS_SWIFT_EMBEDDED when it builds with a `*-embedded` Swift SDK; the
-// WASI condition keeps the library away from host tools such as the macro.
-let embeddedWasmLinkerSettings: [LinkerSetting] =
-    Context.environment["WORKERS_SWIFT_EMBEDDED"] == nil
-        ? []
-        : [.linkedLibrary("swiftUnicodeDataTables", .when(platforms: [.wasi]))]
-
 let package = Package(
     name: "WorkersSwift",
-    // `Synchronization.Mutex` guards the ABI state in native test runs.
     platforms: [.macOS(.v15)],
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
@@ -35,6 +25,8 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-syntax.git", "600.0.0"..<"700.0.0"),
+        // The Swift counterpart of wasm-bindgen and js-sys.
+        .package(url: "https://github.com/swiftwasm/JavaScriptKit.git", from: "0.59.0"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -48,14 +40,19 @@ let package = Package(
         ),
         .target(
             name: "WorkersSwift",
-            dependencies: ["WorkersSwiftMacros"],
-            linkerSettings: embeddedWasmLinkerSettings
+            dependencies: [
+                "WorkersSwiftMacros",
+                .product(name: "JavaScriptKit", package: "JavaScriptKit"),
+                .product(name: "JavaScriptEventLoop", package: "JavaScriptKit"),
+            ]
         ),
-        // The example worker. It is a library so tests can import it;
-        // WorkersSwiftWasm links it into WorkersSwift.wasm.
+        // The example worker; WorkersSwiftWasm links it into WorkersSwift.wasm.
         .target(
             name: "HelloWorker",
-            dependencies: ["WorkersSwift"]
+            dependencies: [
+                "WorkersSwift",
+                .product(name: "JavaScriptKit", package: "JavaScriptKit"),
+            ]
         ),
         .executableTarget(
             name: "WorkersSwiftWasm",
@@ -75,7 +72,7 @@ let package = Package(
         ),
         .testTarget(
             name: "WorkersSwiftTests",
-            dependencies: ["WorkersSwift", "HelloWorker"]
+            dependencies: ["WorkersSwift"]
         ),
         .testTarget(
             name: "WorkersSwiftMacrosTests",

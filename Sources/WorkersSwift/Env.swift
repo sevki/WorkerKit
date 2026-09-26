@@ -1,0 +1,21 @@
+import JavaScriptKit
+
+/// The worker's bindings: the runtime's `env` object.
+public final class Env: @unchecked Sendable {
+    /// The underlying JavaScript `env` object.
+    public let jsObject: JSObject
+
+    public init(_ jsObject: JSObject) {
+        self.jsObject = jsObject
+    }
+
+    /// A plain-text variable, such as an entry of `vars` in wrangler.jsonc.
+    public func variable(_ name: String) -> String? {
+        jsObject[name].string
+    }
+
+    /// A secret, such as one set with `wrangler secret put`.
+    public func secret(_ name: String) -> String? {
+        jsObject[name].string
+    }
+}

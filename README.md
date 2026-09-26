@@ -1,50 +1,53 @@
 # workers-swift
 
-A tiny Swift starting point for a `workers-rs`-style project that can be compiled to WebAssembly and loaded by both [workerd](https://github.com/cloudflare/workerd) and [denoland/celld](https://github.com/denoland/celld).
-
-## What is in this repository?
-
-- `Sources/WorkersSwift/WorkersSwift.swift` contains the request/response types, the `@Event` macro declaration, and the Wasm ABI exports. It does not use Foundation, so it also builds with the Embedded Swift Wasm SDK.
-- `Sources/WorkersSwiftMacros` implements `@Event`.
-- `Sources/HelloWorker` is an example worker, and `Sources/WorkersSwiftWasm` is the executable that `worker-build` links it into as `WorkersSwift.wasm`.
-- `Plugins/WorkerBuild` is the `swift package worker-build` command plugin, the Swift counterpart of workers-rs' `worker-build`.
-- `Examples/workerd-celld/worker.mjs` is the JavaScript shim that instantiates the Swift WebAssembly module and forwards `fetch` requests into Swift.
-- `Tests/WorkersSwiftTests` covers the Swift request handling and ABI behavior.
-- `Tests/e2e` serves the shim from real `workerd` and `celld` processes and sends HTTP requests to it.
-
-## Writing a worker
-
-Like workers-rs' `#[event(fetch)]`, mark one top-level function in an executable target with `@Event(.fetch)`:
+Write [Workers](https://developers.cloudflare.com/workers/) in Swift, in the style of [workers-rs](https://github.com/cloudflare/workers-rs). Workers compile to WebAssembly and run on [workerd](https://github.com/cloudflare/workerd) and [denoland/celld](https://github.com/denoland/celld).
 
 ```swift
 import WorkersSwift
 
 @Event(.fetch)
-func fetch(_ request: WorkerRequest) -> WorkerResponse {
-    switch (request.method.uppercased(), request.path) {
+func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
+    switch (req.method, req.path) {
     case ("GET", "/"):
-        return WorkerResponse(status: 200, body: "Hello from Swift on workerd/celld")
+        return .ok("Hello from Swift")
+    case ("POST", "/echo"):
+        return .ok(try await req.text())
     default:
-        return WorkerResponse(status: 404, body: "Not Found")
+        return .error("Not Found", 404)
     }
 }
 ```
 
-The macro generates the `workers_handle_request` export that the JavaScript shim calls for each request, so a module has exactly one `@Event(.fetch)` function. The function may `throw`; an error becomes a `500 Internal Server Error` response. Response headers are forwarded to the JavaScript `Response`; a status outside 200–599 (which `Response` rejects) becomes a 500. `async` handlers are not supported yet.
+## How it maps to workers-rs
 
-## Native development
+| workers-rs | workers-swift |
+|---|---|
+| `worker` (`Request`, `Response`, `Env`, `Context`, …) | `WorkersSwift` |
+| `#[event(fetch)]` | `@Event(.fetch)` (`WorkersSwiftMacros`) |
+| `wasm-bindgen`, `js-sys`, `wasm-bindgen-futures` | [JavaScriptKit](https://github.com/swiftwasm/JavaScriptKit) and JavaScriptEventLoop |
+| `worker-build` and its `shim.mjs` | `swift package worker-build` (`Plugins/WorkerBuild`) and `JavaScript/shim.mjs` |
 
-```bash
-swift test
-```
+`Request`, `Headers`, `Env` and `Context` wrap the runtime's own JavaScript objects, and each exposes it as `jsObject`, so any Web or Workers API is one JavaScriptKit call away (see the `/digest` route in `Sources/HelloWorker`, which awaits `crypto.subtle.digest`). `Response` is a Swift value until the handler returns it:
 
-## Building for WebAssembly
+- `Response.ok(_:)`, `.text(_:status:)`, `.error(_:_:)`, `.empty(status:)`, and `withHeader(_:_:)`.
+- A status outside 200–599 or a header that the Fetch `Headers` class would reject becomes a `500` rather than a JavaScript exception, and 204, 205 and 304 are sent without a body.
+- An error thrown by the handler is logged with `console.error` and becomes `500 Internal Server Error`.
 
-1. Install the Swift SDK for WebAssembly that matches your toolchain version (see [Getting Started with Swift SDKs for WebAssembly](https://www.swift.org/documentation/articles/wasm-getting-started.html)) and check its identifier:
+`Env` reads plain-text bindings (`env.variable("NAME")`, `env.secret("NAME")`), and `Context` exposes `waitUntil` and `passThroughOnException`. Typed bindings such as KV, R2, D1 and Durable Objects are not wrapped yet.
 
-   ```bash
-   swift sdk list
-   ```
+## Repository layout
+
+- `Sources/WorkersSwift`: the library.
+- `Sources/WorkersSwiftMacros`: `@Event`.
+- `Sources/HelloWorker`: an example worker, which `Sources/WorkersSwiftWasm` links into `WorkersSwift.wasm`.
+- `Plugins/WorkerBuild`: `swift package worker-build`.
+- `JavaScript/shim.mjs`: the Worker entry point that instantiates the module and calls into Swift.
+- `Tests/WorkersSwiftTests`, `Tests/WorkersSwiftMacrosTests`: native tests (`swift test`).
+- `Tests/e2e`: runs the built worker in real workerd and celld processes.
+
+## Building
+
+1. Install the Swift SDK for WebAssembly that matches your toolchain version (see [Getting Started with Swift SDKs for WebAssembly](https://www.swift.org/documentation/articles/wasm-getting-started.html)). Workers use Swift concurrency, so use the `*_wasm` SDK; the Embedded Swift SDK is not supported.
 
 2. Build the worker:
 
@@ -52,43 +55,28 @@ swift test
    swift package --allow-writing-to-package-directory worker-build
    ```
 
-   The plugin picks the installed `*_wasm` SDK (or `*_wasm-embedded` when that is the only one), builds the `WorkersSwiftWasm` product as a WASI reactor module, and writes:
+   The plugin builds the `WorkersSwiftWasm` product as a WASI reactor module and writes:
 
    ```
-   build/worker/worker.mjs
+   build/worker/worker.mjs        JavaScriptKit's runtime.mjs + JavaScript/shim.mjs, as one module
    build/worker/WorkersSwift.wasm
    ```
 
-   With an Embedded Swift SDK, the plugin also sets `WORKERS_SWIFT_EMBEDDED=1`, which makes `Package.swift` link Embedded Swift's Unicode data tables; set it yourself if you run `swift build` directly.
+   Options: `--swift-sdk <id>`, `--product <name>` (in your own package, the executable that holds your `@Event(.fetch)` function), `-c debug|release` (default `release`), and `--output <dir>`. On macOS, add `--disable-sandbox` if the plugin sandbox blocks the nested `swift build`.
 
-   Options: `--swift-sdk <id>`, `--product <name>`, `-c debug|release` (default `release`), and `--output <dir>`. On macOS, add `--disable-sandbox` if the nested `swift build` is blocked by the plugin sandbox.
+## Running on workerd or celld
 
-The JavaScript shim expects these WebAssembly exports:
+Both runtimes resolve `worker.mjs`'s `import "./WorkersSwift.wasm"` to a compiled `WebAssembly.Module`.
 
-- `workers_alloc`
-- `workers_free`
-- `workers_handle_request`
-- `workers_response_status`
-- `workers_response_body_len`
-- `workers_response_body_copy`
-- `workers_response_headers_len`
-- `workers_response_headers_copy` (headers as `name\0value\0` pairs)
-- `workers_response_release`
-- `memory`
-- `_initialize` (called once before any other export, as a WASI reactor requires)
-
-## Using with workerd or celld
-
-Point your Worker at `build/worker/worker.mjs`. Both runtimes resolve its `import "./WorkersSwift.wasm"` to a compiled `WebAssembly.Module`.
-
-For [celld](https://github.com/denoland/celld) (and Wrangler), a `wrangler.jsonc` like this works:
+For [celld](https://github.com/denoland/celld) (and Wrangler), point `main` at the built worker:
 
 ```jsonc
 {
   "name": "my-swift-worker",
   "main": "build/worker/worker.mjs",
   "no_bundle": true,
-  "compatibility_date": "2026-01-01"
+  "compatibility_date": "2026-01-01",
+  "vars": { "GREETING": "hello" }
 }
 ```
 
@@ -105,19 +93,14 @@ modules = [
 ],
 ```
 
-Workers runtimes do not provide WASI, so the shim supplies the few WASI functions the Swift runtime uses (stdout/stderr to `console`, clocks, randomness) and answers every other WASI import with `ENOSYS`. To pass extra imports, call `createWorkerHandler(module, imports)` from the shim.
+Workers runtimes do not provide WASI, so the shim supplies the WASI functions the Swift runtime uses (stdout/stderr to `console`, clocks, randomness) and answers every other WASI import with `ENOSYS`.
 
-The default Swift routes are:
-
-- `GET /` → `200 Hello from Swift on workerd/celld`
-- `GET /health` → `200 ok`
-- everything else → `404 Not Found`
-
-## End-to-end tests
+## Tests
 
 ```bash
+swift test          # Response and @Event, natively
 npm ci
-npm run test:e2e
+npm run test:e2e    # the built worker in workerd (after worker-build)
 ```
 
-This starts `workerd` (from npm) with the shim and sends requests to it. By default it loads `Tests/e2e/fixture.wat`, a hand-written module with the same ABI, so it runs without a Swift SDK. Set `WORKERS_SWIFT_WASM=build/worker/WorkersSwift.wasm` to test the real Swift build, and `E2E_RUNTIMES=workerd,celld` to also run against a `celld` binary on `PATH` (or `CELLD_BIN`). CI runs both runtimes against the fixture and against the output of both the `wasm` and the `wasm-embedded` SDK.
+`npm run test:e2e` serves `build/worker` (or `WORKER_DIR`) with workerd from npm. Set `E2E_RUNTIMES=workerd,celld` to also run it on a `celld` binary on `PATH` (or `CELLD_BIN`). CI builds the worker with the Wasm SDK and runs the suite on both runtimes, and runs `swift test` on Linux and macOS.

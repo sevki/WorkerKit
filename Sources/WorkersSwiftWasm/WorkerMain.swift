@@ -1,6 +1,6 @@
-// Entry point for WorkersSwift.wasm. It is linked as a WASI reactor, so `main`
-// never runs: the JavaScript shim calls `_initialize` and then the `workers_*`
-// exports, including the one `@Event(.fetch)` generates in HelloWorker.
+// Entry point for WorkersSwift.wasm. It is linked as a WASI reactor, so this
+// never runs: the shim calls the `workers_js_main` export that `@Event(.fetch)`
+// generates in HelloWorker.
 import HelloWorker
 
 @main

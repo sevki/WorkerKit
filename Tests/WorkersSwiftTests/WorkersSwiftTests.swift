@@ -1,236 +1,64 @@
 import Testing
 @testable import WorkersSwift
-@testable import HelloWorker
 
-@Test func rootRequestReturnsHelloMessage() async throws {
-    let response = fetch(.init(method: "GET", path: "/"))
+// Request, Headers, Env and Context wrap JavaScript objects, so they are
+// covered by the end-to-end tests in Tests/e2e. These tests cover the Swift
+// side of Response, which runs before any JavaScript is involved.
 
-    #expect(response.status == 200)
-    #expect(response.body == "Hello from Swift on workerd/celld")
-    #expect(response.headers["content-type"] == "text/plain; charset=utf-8")
-}
-
-@Test func healthRequestReturnsOk() async throws {
-    let response = fetch(.init(method: "GET", path: "/health"))
+@Test func okIsPlainText200() {
+    let response = Response.ok("hi")
 
     #expect(response.status == 200)
-    #expect(response.body == "ok")
+    #expect(response.body == Array("hi".utf8))
+    #expect(response.headers.map(\.name) == ["content-type"])
+    #expect(response.headers.map(\.value) == ["text/plain; charset=utf-8"])
 }
 
-@Test func unknownRouteReturnsNotFound() async throws {
-    let response = fetch(.init(method: "POST", path: "/missing"))
+@Test func errorCarriesItsStatus() {
+    let response = Response.error("Not Found", 404)
 
     #expect(response.status == 404)
-    #expect(response.body == "Not Found")
+    #expect(response.body == Array("Not Found".utf8))
 }
 
-@Test func lowercaseMethodStillMatchesRoute() async throws {
-    let response = fetch(.init(method: "get", path: "/health"))
+@Test func withHeaderAppendsInOrder() {
+    let response = Response.empty().withHeader("set-cookie", "a=1").withHeader("set-cookie", "b=2")
 
-    #expect(response.status == 200)
-    #expect(response.body == "ok")
+    #expect(response.status == 204)
+    #expect(response.headers.map(\.value) == ["a=1", "b=2"])
 }
 
-@Test func mixedCaseNonGetMethodStillMissesGetRoute() async throws {
-    let response = fetch(.init(method: "PoSt", path: "/health"))
-
-    #expect(response.status == 404)
-    #expect(response.body == "Not Found")
-}
-
-@Test func wasmRequestExportsRoundTripResponseBody() async throws {
-    let method = Array("GET".utf8)
-    let path = Array("/".utf8)
-
-    let handle = method.withUnsafeBufferPointer { methodBuffer in
-        path.withUnsafeBufferPointer { pathBuffer in
-            __workersSwift_fetch(
-                methodBuffer.baseAddress,
-                Int32(methodBuffer.count),
-                pathBuffer.baseAddress,
-                Int32(pathBuffer.count)
-            )
-        }
-    }
-
-    #expect(workers_response_status(handle) == 200)
-    let bodyLength = workers_response_body_len(handle)
-    #expect(bodyLength == Int32("Hello from Swift on workerd/celld".utf8.count))
-
-    let bodyPointer = workers_alloc(bodyLength, 1)
-    #expect(bodyPointer != nil)
-
-    workers_response_body_copy(handle, bodyPointer)
-
-    let body = String(
-        decoding: UnsafeBufferPointer(
-            start: bodyPointer?.assumingMemoryBound(to: UInt8.self),
-            count: Int(bodyLength)
-        ),
-        as: UTF8.self
-    )
-
-    #expect(body == "Hello from Swift on workerd/celld")
-
-    workers_free(bodyPointer, bodyLength, 1)
-    workers_response_release(handle)
-    #expect(workers_response_status(handle) == 500)
-}
-
-@Test func wasmAllocatorRejectsNegativeSizesAndSupportsEmptyBuffers() async throws {
-    #expect(workers_alloc(-1, 1) == nil)
-
-    let empty = workers_alloc(0, 1)
-    #expect(empty != nil)
-    workers_free(empty, 0, 1)
-}
-
-@Test func wasmAllocatorRejectsInvalidAlignment() async throws {
-    #expect(workers_alloc(4, 3) == nil)
-}
-
-@Test func wasmRequestRejectsNegativeLengths() async throws {
-    let method = Array("GET".utf8)
-
-    let handle = method.withUnsafeBufferPointer { methodBuffer in
-        __workersSwift_fetch(methodBuffer.baseAddress, -1, nil, 0)
-    }
-
-    #expect(handle == 0)
-}
-
-@Test func wasmStoreFallsBackForOutOfRangeStatus() async throws {
-    let handle = WasmResponseStore.store(WorkerResponse(status: Int(Int32.max) + 1, body: "boom"))
-
-    #expect(workers_response_status(handle) == 500)
-    let bodyLength = workers_response_body_len(handle)
-    let bodyPointer = workers_alloc(bodyLength, 1)
-    #expect(bodyPointer != nil)
-
-    workers_response_body_copy(handle, bodyPointer)
-
-    let body = String(
-        decoding: UnsafeBufferPointer(
-            start: bodyPointer?.assumingMemoryBound(to: UInt8.self),
-            count: Int(bodyLength)
-        ),
-        as: UTF8.self
-    )
-
-    #expect(body == "Response status out of range for ABI")
-
-    workers_free(bodyPointer, bodyLength, 1)
-    workers_response_release(handle)
-}
-
-@Test func wasmHandleGenerationSkipsZeroOnWraparound() async throws {
-    #expect(WasmResponseStore.nextValidHandle(after: .max) == 1)
-}
-
-@Test func wasmRequestRejectsMissingPointerForPositiveLength() async throws {
-    #expect(__workersSwift_fetch(nil, 1, nil, 0) == 0)
-}
-
-@Test func wasmRequestRejectsInvalidUtf8() async throws {
-    let invalidMethod: [UInt8] = [0xFF]
-
-    let handle = invalidMethod.withUnsafeBufferPointer { methodBuffer in
-        __workersSwift_fetch(methodBuffer.baseAddress, Int32(methodBuffer.count), nil, 0)
-    }
-
-    #expect(handle == 0)
-}
-
-@Test func wasmRequestAllowsMissingZeroLengthBuffers() async throws {
-    let handle = __workersSwift_fetch(nil, 0, nil, 0)
-
-    #expect(handle > 0)
-    #expect(workers_response_status(handle) == 404)
-    workers_response_release(handle)
-}
-
-@Test func runtimePassesDecodedRequestToHandler() async throws {
-    let method = Array("PATCH".utf8)
-    let path = Array("/caf\u{e9}".utf8)
-
-    let handle = method.withUnsafeBufferPointer { methodBuffer in
-        path.withUnsafeBufferPointer { pathBuffer in
-            WorkersRuntime.handleRequest(
-                methodBuffer.baseAddress,
-                Int32(methodBuffer.count),
-                pathBuffer.baseAddress,
-                Int32(pathBuffer.count)
-            ) { request in
-                WorkerResponse(status: 201, body: "\(request.method) \(request.path)")
-            }
-        }
-    }
-
-    #expect(workers_response_status(handle) == 201)
-    #expect(workers_response_body_len(handle) == Int32("PATCH /caf\u{e9}".utf8.count))
-    workers_response_release(handle)
-}
-
-private func copiedHeaders(_ handle: Int32) -> [String: String] {
-    let length = Int(workers_response_headers_len(handle))
-    var bytes = [UInt8](repeating: 0, count: length)
-    bytes.withUnsafeMutableBytes { workers_response_headers_copy(handle, $0.baseAddress) }
-
-    let parts = bytes.split(separator: 0, omittingEmptySubsequences: false).map {
-        String(decoding: $0, as: UTF8.self)
-    }
-    var headers: [String: String] = [:]
-    for index in stride(from: 0, to: parts.count - 1, by: 2) {
-        headers[parts[index]] = parts[index + 1]
-    }
-    return headers
-}
-
-@Test func wasmStoreForwardsResponseHeaders() async throws {
-    let handle = WasmResponseStore.store(WorkerResponse(
-        status: 302,
-        headers: ["location": "/next", "cache-control": "no-store"],
-        body: ""
-    ))
-
-    #expect(workers_response_status(handle) == 302)
-    #expect(copiedHeaders(handle) == ["location": "/next", "cache-control": "no-store"])
-    workers_response_release(handle)
+@Test(arguments: [200, 204, 304, 404, 599])
+func validatedKeepsStatusesResponseAccepts(status: Int) {
+    #expect(Response(status: status).validated().status == status)
 }
 
 @Test(arguments: [0, 101, 199, 600, 1000])
-func wasmStoreRejectsStatusesResponseCannotRepresent(status: Int) async throws {
-    let handle = WasmResponseStore.store(WorkerResponse(status: status, body: "boom"))
+func validatedRejectsStatusesResponseCannotRepresent(status: Int) {
+    let response = Response(status: status).validated()
 
-    #expect(workers_response_status(handle) == 500)
-    #expect(copiedHeaders(handle) == ["content-type": "text/plain; charset=utf-8"])
-    workers_response_release(handle)
+    #expect(response.status == 500)
+    #expect(String(decoding: response.body, as: UTF8.self) == "Response status \(status) is outside 200-599")
 }
 
 @Test(arguments: [
-    ["x-bad": "a\u{0}b"],
-    ["x-bad": "line\nbreak"],
-    ["x-bad": "carriage\rreturn"],
-    ["x-bad": "emoji \u{1F642}"],
-    ["bad name": "value"],
-    ["": "value"],
-    ["x-caf\u{e9}": "value"],
+    ("x-bad", "a\u{0}b"),
+    ("x-bad", "line\nbreak"),
+    ("x-bad", "carriage\rreturn"),
+    ("x-bad", "emoji \u{1F642}"),
+    ("bad name", "value"),
+    ("", "value"),
+    ("x-caf\u{e9}", "value"),
 ])
-func wasmStoreRejectsHeadersFetchCannotRepresent(headers: [String: String]) async throws {
-    let handle = WasmResponseStore.store(WorkerResponse(status: 200, headers: headers, body: "ok"))
+func validatedRejectsHeadersFetchCannotRepresent(name: String, value: String) {
+    let response = Response.ok("hi").withHeader(name, value).validated()
 
-    #expect(workers_response_status(handle) == 500)
-    #expect(copiedHeaders(handle) == ["content-type": "text/plain; charset=utf-8"])
-    workers_response_release(handle)
+    #expect(response.status == 500)
+    #expect(String(decoding: response.body, as: UTF8.self) == "Response header is not a valid HTTP header")
 }
 
-@Test func wasmStoreAcceptsTokenHeaderNames() async throws {
-    let handle = WasmResponseStore.store(WorkerResponse(
-        status: 204,
-        headers: ["X-Custom_Header.v2!": "caf\u{e9} value"],
-        body: ""
-    ))
+@Test func validatedAcceptsTokenNamesAndLatin1Values() {
+    let response = Response.ok("hi").withHeader("X-Custom_Header.v2!", "caf\u{e9} value").validated()
 
-    #expect(workers_response_status(handle) == 204)
-    workers_response_release(handle)
+    #expect(response.status == 200)
 }

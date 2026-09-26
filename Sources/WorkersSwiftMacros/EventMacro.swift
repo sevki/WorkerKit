@@ -2,8 +2,9 @@ import SwiftCompilerPlugin
 import SwiftSyntax
 import SwiftSyntaxMacros
 
-/// Expands `@Event(.fetch)` on a top-level function into the
-/// `workers_handle_request` Wasm export that worker.mjs calls for each request.
+/// Expands `@Event(.fetch)` on a top-level function into the `workers_js_main`
+/// Wasm export, which the JavaScript shim calls once per isolate to register
+/// the function as the worker's fetch handler.
 public struct EventMacro: PeerMacro {
     public static func expansion(
         of node: AttributeSyntax,
@@ -25,35 +26,29 @@ public struct EventMacro: PeerMacro {
 
         let signature = function.signature
         let parameters = Array(signature.parameterClause.parameters)
-        guard parameters.count == 1, let parameter = parameters.first, signature.returnClause != nil else {
+        guard parameters.count == 3, signature.returnClause != nil else {
             throw MacroExpansionErrorMessage(
-                "@Event(.fetch) requires a function of type (WorkerRequest) -> WorkerResponse"
+                "@Event(.fetch) requires a function of type (Request, Env, Context) async throws -> Response"
             )
         }
-        if signature.effectSpecifiers?.asyncSpecifier != nil {
-            throw MacroExpansionErrorMessage("@Event(.fetch) does not support async functions yet")
-        }
 
-        let label = parameter.firstName.tokenKind == .wildcard ? "" : "\(parameter.firstName.text): "
-        let call = "\(function.name.text)(\(label)request)"
-        let handler = signature.effectSpecifiers?.throwsClause == nil
-            ? call
-            : "do { return try \(call) } catch { return WorkerResponse(status: 500, body: \"Internal Server Error\") }"
+        let arguments = zip(parameters, ["request", "env", "context"]).map { parameter, value in
+            parameter.firstName.tokenKind == .wildcard ? value : "\(parameter.firstName.text): \(value)"
+        }
+        let effects = signature.effectSpecifiers
+        let call = (effects?.throwsClause != nil ? "try " : "")
+            + (effects?.asyncSpecifier != nil ? "await " : "")
+            + "\(function.name.text)(\(arguments.joined(separator: ", ")))"
 
         return [
             """
             #if arch(wasm32)
-            @_expose(wasm, "workers_handle_request")
+            @_expose(wasm, "workers_js_main")
             #endif
-            @_cdecl("workers_handle_request")
-            public func __workersSwift_fetch(
-                _ methodPointer: UnsafePointer<UInt8>?,
-                _ methodLength: Int32,
-                _ pathPointer: UnsafePointer<UInt8>?,
-                _ pathLength: Int32
-            ) -> Int32 {
-                WorkersRuntime.handleRequest(methodPointer, methodLength, pathPointer, pathLength) { request in
-                    \(raw: handler)
+            @_cdecl("workers_js_main")
+            public func __workersSwift_main() {
+                WorkersRuntime.registerFetch { request, env, context in
+                    \(raw: call)
                 }
             }
             """,

@@ -9,6 +9,9 @@ const WASM_ALIGNMENT = 1;
 const WASI_MODULE = "wasi_snapshot_preview1";
 const WASI_ESUCCESS = 0;
 const WASI_EBADF = 8;
+const WASI_EINVAL = 28;
+const WASI_CLOCK_REALTIME = 0;
+const WASI_CLOCK_MONOTONIC = 1;
 const WASI_ENOSYS = 52;
 
 class WasiExit extends Error {
@@ -36,8 +39,15 @@ function createWasiImports(getMemory) {
     args_get: () => WASI_ESUCCESS,
     environ_sizes_get: zeroCounts,
     environ_get: () => WASI_ESUCCESS,
-    clock_time_get(_clockId, _precision, resultPointer) {
-      const nanoseconds = BigInt(Date.now()) * 1_000_000n;
+    clock_time_get(clockId, _precision, resultPointer) {
+      let nanoseconds;
+      if (clockId === WASI_CLOCK_REALTIME) {
+        nanoseconds = BigInt(Date.now()) * 1_000_000n;
+      } else if (clockId === WASI_CLOCK_MONOTONIC) {
+        nanoseconds = BigInt(Math.round(performance.now() * 1_000_000));
+      } else {
+        return WASI_EINVAL;
+      }
       view().setBigUint64(resultPointer, nanoseconds, true);
       return WASI_ESUCCESS;
     },

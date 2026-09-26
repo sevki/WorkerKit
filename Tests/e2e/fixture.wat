@@ -6,6 +6,8 @@
 (module
   (import "wasi_snapshot_preview1" "fd_write"
     (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "clock_time_get"
+    (func $clock_time_get (param i32 i64 i32) (result i32)))
   (import "wasi_snapshot_preview1" "random_get"
     (func $random_get (param i32 i32) (result i32)))
   ;; Never called: checks that the shim stubs WASI functions it does not know.
@@ -40,6 +42,13 @@
     (drop (call $random_get (i32.const 12) (i32.const 4)))
     ;; More than getRandomValues' 65,536-byte quota: the shim must chunk it.
     (if (call $random_get (i32.const 20000) (i32.const 70000))
+      (then (unreachable)))
+    ;; Realtime and monotonic clocks succeed; other clock IDs are EINVAL (28).
+    (if (call $clock_time_get (i32.const 0) (i64.const 1) (i32.const 1000))
+      (then (unreachable)))
+    (if (call $clock_time_get (i32.const 1) (i64.const 1) (i32.const 1000))
+      (then (unreachable)))
+    (if (i32.ne (call $clock_time_get (i32.const 2) (i64.const 1) (i32.const 1000)) (i32.const 28))
       (then (unreachable)))
     (global.set $ready (i32.const 1)))
 

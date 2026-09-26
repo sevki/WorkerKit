@@ -8,4 +8,4 @@ DerivedData/
 .netrc
 /node_modules
 /build
-/Examples/JavaScriptKitSpike/.build
+/Examples/JavaScriptKitWorker/.build

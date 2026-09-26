@@ -1,4 +1,4 @@
-// Worker entry for the JavaScriptKit spike. bundle.mjs prepends JavaScriptKit's
+// Worker entry for the JavaScriptKit worker. bundle.mjs prepends JavaScriptKit's
 // runtime.mjs (which defines SwiftRuntime) because celld's no_bundle mode
 // takes a single JavaScript file.
 import wasmModule from "./JSKitWorker.wasm";

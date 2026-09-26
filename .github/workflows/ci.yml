@@ -102,7 +102,7 @@ jobs:
           npm run test:e2e
 
   jskit-build:
-    name: JavaScriptKit spike build
+    name: JavaScriptKit worker build
     runs-on: ubuntu-24.04
     container: swift:6.3
     steps:
@@ -121,7 +121,7 @@ jobs:
 
       - name: Build JSKitWorker.wasm
         run: |
-          set -- --package-path Examples/JavaScriptKitSpike --swift-sdk "$SWIFT_SDK" \
+          set -- --package-path Examples/JavaScriptKitWorker --swift-sdk "$SWIFT_SDK" \
             -c release --product JSKitWorker \
             -Xswiftc -Xclang-linker -Xswiftc -mexec-model=reactor
           swift build "$@"
@@ -129,7 +129,7 @@ jobs:
           mkdir -p jskit
           cp "$bin/JSKitWorker.wasm" jskit/
           # The JS runtime must match the resolved JavaScriptKit version.
-          cp Examples/JavaScriptKitSpike/.build/checkouts/JavaScriptKit/Plugins/PackageToJS/Templates/runtime.mjs jskit/
+          cp Examples/JavaScriptKitWorker/.build/checkouts/JavaScriptKit/Plugins/PackageToJS/Templates/runtime.mjs jskit/
           ls -l jskit
 
       - uses: actions/upload-artifact@v4
@@ -139,7 +139,7 @@ jobs:
           if-no-files-found: error
 
   jskit-e2e:
-    name: JavaScriptKit spike end-to-end
+    name: JavaScriptKit worker end-to-end
     needs: jskit-build
     runs-on: ubuntu-24.04
     steps:
@@ -168,5 +168,5 @@ jobs:
         env:
           E2E_RUNTIMES: workerd,celld
         run: |
-          node Examples/JavaScriptKitSpike/bundle.mjs jskit-build/runtime.mjs jskit-build/JSKitWorker.wasm jskit
+          node Examples/JavaScriptKitWorker/bundle.mjs jskit-build/runtime.mjs jskit-build/JSKitWorker.wasm jskit
           JSKIT_WORKER_DIR="$PWD/jskit" node --test Tests/e2e/jskit.test.mjs

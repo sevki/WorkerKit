@@ -1,4 +1,4 @@
-// End-to-end tests for the JavaScriptKit spike (Examples/JavaScriptKitSpike).
+// End-to-end tests for the JavaScriptKit worker (Examples/JavaScriptKitWorker).
 //
 //   JSKIT_WORKER_DIR  directory holding the bundled worker.mjs and
 //                     JSKitWorker.wasm (see bundle.mjs). The suite is skipped

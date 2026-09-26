@@ -207,9 +207,30 @@ func wasmStoreRejectsStatusesResponseCannotRepresent(status: Int) async throws {
     workers_response_release(handle)
 }
 
-@Test func wasmStoreRejectsHeadersContainingNul() async throws {
-    let handle = WasmResponseStore.store(WorkerResponse(status: 200, headers: ["x-bad": "a\u{0}b"], body: "ok"))
+@Test(arguments: [
+    ["x-bad": "a\u{0}b"],
+    ["x-bad": "line\nbreak"],
+    ["x-bad": "carriage\rreturn"],
+    ["x-bad": "emoji \u{1F642}"],
+    ["bad name": "value"],
+    ["": "value"],
+    ["x-caf\u{e9}": "value"],
+])
+func wasmStoreRejectsHeadersFetchCannotRepresent(headers: [String: String]) async throws {
+    let handle = WasmResponseStore.store(WorkerResponse(status: 200, headers: headers, body: "ok"))
 
     #expect(workers_response_status(handle) == 500)
+    #expect(copiedHeaders(handle) == ["content-type": "text/plain; charset=utf-8"])
+    workers_response_release(handle)
+}
+
+@Test func wasmStoreAcceptsTokenHeaderNames() async throws {
+    let handle = WasmResponseStore.store(WorkerResponse(
+        status: 204,
+        headers: ["X-Custom_Header.v2!": "caf\u{e9} value"],
+        body: ""
+    ))
+
+    #expect(workers_response_status(handle) == 204)
     workers_response_release(handle)
 }

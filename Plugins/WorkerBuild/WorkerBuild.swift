@@ -260,10 +260,15 @@ struct WorkerBuild: CommandPlugin {
             source += "}\n"
         }
 
+        // Each class is bound to a prefixed constant and exported under its
+        // own name, so a Durable Object named like a binding of the bundled
+        // runtime or shim (`SwiftRuntime`, `ConsoleStream`, …) cannot
+        // redeclare it.
         for (name, methods) in durableObjects {
+            let binding = "__workersSwiftDurableObjectClass_\(name)"
             source += """
 
-                export class \(name) extends __WorkersSwiftDurableObjectBase {
+                const \(binding) = class extends __WorkersSwiftDurableObjectBase {
                   #swift;
 
                   constructor(ctx, env) {
@@ -290,7 +295,12 @@ struct WorkerBuild: CommandPlugin {
 
                     """
             }
-            source += "}\n"
+            source += """
+                };
+                Object.defineProperty(\(binding), "name", { value: "\(name)" });
+                export { \(binding) as \(name) };
+
+                """
         }
         return source
     }

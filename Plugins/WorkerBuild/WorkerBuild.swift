@@ -168,6 +168,11 @@ struct WorkerBuild: CommandPlugin {
             .map { export in
                 let parts = export.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
                 let methods = parts.count > 2 ? parts[2].split(separator: ",").map(String.init) : []
+                // @DurableObject checks these too; the generated JavaScript
+                // must not be able to break on them.
+                for identifier in [parts[1]] + methods where identifier.range(of: #"^[A-Za-z_$][A-Za-z0-9_$]*$"#, options: .regularExpression) == nil {
+                    throw WorkerBuildError("Durable Object export \(export) has a name that is not a JavaScript identifier")
+                }
                 return (name: parts[1], methods: methods)
             }
     }

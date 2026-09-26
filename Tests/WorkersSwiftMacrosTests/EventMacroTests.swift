@@ -238,4 +238,26 @@ final class EventMacroTests: XCTestCase {
             macros: macros
         )
     }
+
+    func testDurableObjectRejectsNamesJavaScriptCannotUse() {
+        assertMacroExpansion(
+            """
+            @DurableObject
+            final class Café {
+            }
+            """,
+            expandedSource: """
+            final class Café {
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@DurableObject class name Café must also be a JavaScript class name (ASCII letters, digits, _ and $)",
+                    line: 1,
+                    column: 1
+                ),
+            ],
+            macros: macros
+        )
+    }
 }

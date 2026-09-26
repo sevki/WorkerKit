@@ -36,11 +36,12 @@ class ConsoleStream {
     }
   }
 
+  // Logs the decoded text so far. The decoder keeps any partial UTF-8
+  // sequence, because a concurrent request may still be writing its rest.
   flush() {
-    const rest = this.pending + this.decoder.decode();
-    this.pending = "";
-    if (rest) {
-      this.log(rest);
+    if (this.pending) {
+      this.log(this.pending);
+      this.pending = "";
     }
   }
 }

@@ -21,9 +21,19 @@ public struct DurableObjectMacro: PeerMacro, ExtensionMacro {
         }
 
         let name = classDecl.name.text
+        guard isJavaScriptIdentifier(name), !javaScriptReservedWords.contains(name) else {
+            throw MacroExpansionErrorMessage(
+                "@DurableObject class name \(name) must also be a JavaScript class name (ASCII letters, digits, _ and $)"
+            )
+        }
         let rpcMethods = classDecl.memberBlock.members
             .compactMap { $0.decl.as(FunctionDeclSyntax.self) }
             .filter { $0.attributes.contains(where: isRPCAttribute) }
+        if let invalid = rpcMethods.first(where: { !isJavaScriptIdentifier($0.name.text) }) {
+            throw MacroExpansionErrorMessage(
+                "@RPC method name \(invalid.name.text) must also be a JavaScript method name (ASCII letters, digits, _ and $)"
+            )
+        }
         // The generated JavaScript class defines these itself.
         if let reserved = rpcMethods.first(where: { ["constructor", "fetch", "alarm"].contains($0.name.text) }) {
             throw MacroExpansionErrorMessage("@RPC method \(reserved.name.text) clashes with the Durable Object class's own \(reserved.name.text)")
@@ -102,3 +112,26 @@ public struct RPCMacro: PeerMacro {
 private func isRPCAttribute(_ element: AttributeListSyntax.Element) -> Bool {
     element.as(AttributeSyntax.self)?.attributeName.trimmedDescription == "RPC"
 }
+
+/// Whether `name` is an ASCII JavaScript identifier, as `worker-build` needs
+/// for the generated class and method names.
+func isJavaScriptIdentifier(_ name: String) -> Bool {
+    guard let first = name.utf8.first else {
+        return false
+    }
+    func isLetter(_ byte: UInt8) -> Bool {
+        (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(byte)
+            || (UInt8(ascii: "A")...UInt8(ascii: "Z")).contains(byte)
+            || byte == UInt8(ascii: "_") || byte == UInt8(ascii: "$")
+    }
+    return isLetter(first) && name.utf8.allSatisfy { isLetter($0) || (UInt8(ascii: "0")...UInt8(ascii: "9")).contains($0) }
+}
+
+/// Words JavaScript does not allow as a class name.
+let javaScriptReservedWords: Set<String> = [
+    "arguments", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default",
+    "delete", "do", "else", "enum", "eval", "export", "extends", "false", "finally", "for", "function",
+    "if", "implements", "import", "in", "instanceof", "interface", "let", "new", "null", "package",
+    "private", "protected", "public", "return", "static", "super", "switch", "this", "throw", "true",
+    "try", "typeof", "var", "void", "while", "with", "yield",
+]

@@ -3,6 +3,7 @@
 // takes a single JavaScript file.
 import wasmModule from "./JSKitWorker.wasm";
 
+const WASI_EINVAL = 28;
 const WASI_ENOSYS = 52;
 
 // Workers runtimes provide no WASI. Give the Swift runtime the few calls it
@@ -20,8 +21,16 @@ function buildImportObject(module, swift, getMemory) {
     args_get: () => 0,
     environ_sizes_get: zeroCounts,
     environ_get: () => 0,
-    clock_time_get(_clock, _precision, resultPointer) {
-      view().setBigUint64(resultPointer, BigInt(Date.now()) * 1_000_000n, true);
+    clock_time_get(clockId, _precision, resultPointer) {
+      let nanoseconds;
+      if (clockId === 0) {
+        nanoseconds = BigInt(Date.now()) * 1_000_000n; // realtime
+      } else if (clockId === 1) {
+        nanoseconds = BigInt(Math.round(performance.now() * 1_000_000)); // monotonic
+      } else {
+        return WASI_EINVAL;
+      }
+      view().setBigUint64(resultPointer, nanoseconds, true);
       return 0;
     },
     random_get(pointer, length) {

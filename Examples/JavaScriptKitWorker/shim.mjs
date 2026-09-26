@@ -10,7 +10,6 @@ const WASI_ENOSYS = 52;
 // makes and stub every other import the module declares.
 function buildImportObject(module, swift, getMemory) {
   const view = () => new DataView(getMemory().buffer);
-  const decoder = new TextDecoder();
   const zeroCounts = (countPointer, sizePointer) => {
     view().setUint32(countPointer, 0, true);
     view().setUint32(sizePointer, 0, true);
@@ -42,14 +41,17 @@ function buildImportObject(module, swift, getMemory) {
       return 0;
     },
     fd_write(fd, iovs, iovsLength, writtenPointer) {
+      // The iovecs form one byte stream: a UTF-8 sequence may span two.
+      const streamDecoder = new TextDecoder();
       let text = "";
       let written = 0;
       for (let index = 0; index < iovsLength; index += 1) {
         const pointer = view().getUint32(iovs + index * 8, true);
         const length = view().getUint32(iovs + index * 8 + 4, true);
-        text += decoder.decode(new Uint8Array(getMemory().buffer, pointer, length));
+        text += streamDecoder.decode(new Uint8Array(getMemory().buffer, pointer, length), { stream: true });
         written += length;
       }
+      text += streamDecoder.decode();
       (fd === 2 ? console.error : console.log)(text.replace(/\n$/, ""));
       view().setUint32(writtenPointer, written, true);
       return 0;

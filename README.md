@@ -59,6 +59,8 @@ swift test
    build/worker/WorkersSwift.wasm
    ```
 
+   With an Embedded Swift SDK, the plugin also sets `WORKERS_SWIFT_EMBEDDED=1`, which makes `Package.swift` link Embedded Swift's Unicode data tables; set it yourself if you run `swift build` directly.
+
    Options: `--swift-sdk <id>`, `--product <name>`, `-c debug|release` (default `release`), and `--output <dir>`. On macOS, add `--disable-sandbox` if the nested `swift build` is blocked by the plugin sandbox.
 
 The JavaScript shim expects these WebAssembly exports:

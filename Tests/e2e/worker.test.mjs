@@ -122,6 +122,16 @@ for (const runtime of runtimes) {
       assert.doesNotMatch(output, /split: caf\n/);
     });
 
+    test("stdout without a final newline is logged when the request finishes", { skip: runtime !== "workerd" }, async () => {
+      const result = await request("/log-unterminated");
+      assertNotCrashed(result, "/log-unterminated");
+      const deadline = Date.now() + 5_000;
+      while (!server.output.join("").includes("unterminated output") && Date.now() < deadline) {
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+      }
+      assert.match(server.output.join(""), /unterminated output/);
+    });
+
     test("Durable Object RPC and fetch share the object's storage", async () => {
       const first = await request("/counter/increment");
       assertNotCrashed(first, "/counter/increment");

@@ -47,6 +47,13 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         }
         return .ok("logged")
 
+    case ("GET", "/log-unterminated"):
+        // Writes to stdout without a final newline; the shim logs it when
+        // the request finishes.
+        let bytes = Array("unterminated output".utf8)
+        _ = bytes.withUnsafeBufferPointer { write(1, $0.baseAddress, $0.count) }
+        return .ok("logged")
+
     case ("GET", "/counter/increment"):
         // Durable Object RPC: calls Counter.increment(by:) on the object named
         // "e2e".

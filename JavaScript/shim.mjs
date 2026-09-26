@@ -12,8 +12,10 @@ const WASI_EINVAL = 28;
 const WASI_ENOSYS = 52;
 
 // stdout and stderr are byte streams across fd_write calls: a UTF-8 sequence
-// or a line may span several writes. Each keeps its own decoder and logs only
-// complete lines.
+// or a line may span several writes. Each keeps its own decoder and logs
+// complete lines; flushConsole() logs the rest when a request finishes.
+const MAX_PENDING_OUTPUT = 8192;
+
 class ConsoleStream {
   constructor(log) {
     this.log = log;
@@ -28,6 +30,18 @@ class ConsoleStream {
     for (const line of lines) {
       this.log(line);
     }
+    if (this.pending.length > MAX_PENDING_OUTPUT) {
+      this.log(this.pending);
+      this.pending = "";
+    }
+  }
+
+  flush() {
+    const rest = this.pending + this.decoder.decode();
+    this.pending = "";
+    if (rest) {
+      this.log(rest);
+    }
   }
 }
 
@@ -35,6 +49,20 @@ const streams = {
   1: new ConsoleStream((line) => console.log(line)),
   2: new ConsoleStream((line) => console.error(line)),
 };
+
+function flushConsole() {
+  streams[1].flush();
+  streams[2].flush();
+}
+
+// Runs `call` and then logs any output it left without a final newline.
+async function flushingConsole(call) {
+  try {
+    return await call();
+  } finally {
+    flushConsole();
+  }
+}
 
 // Workers runtimes provide no WASI. Give the Swift runtime the few calls it
 // makes and stub every other import the module declares.
@@ -153,7 +181,12 @@ async function __workersSwiftDurableObject(name, ctx, env) {
   if (typeof factory !== "function") {
     throw new Error(`The Swift worker has no @DurableObject class ${name}`);
   }
-  return factory(ctx, env);
+  const object = factory(ctx, env);
+  return {
+    fetch: (request) => flushingConsole(() => object.fetch(request)),
+    alarm: () => flushingConsole(() => object.alarm()),
+    rpc: (method, args) => flushingConsole(() => object.rpc(method, args)),
+  };
 }
 
 export default {
@@ -163,6 +196,6 @@ export default {
     if (typeof handler !== "function") {
       throw new Error("The Swift worker has no @Event(.fetch) function");
     }
-    return handler(request, env, ctx);
+    return flushingConsole(() => handler(request, env, ctx));
   },
 };

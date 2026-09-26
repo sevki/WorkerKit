@@ -109,15 +109,37 @@ struct WorkerBuild: CommandPlugin {
         return URL(fileURLWithPath: "/usr/bin/env")
     }
 
+    /// The installed `*_wasm` SDK built for the active toolchain. An SDK only
+    /// works with the compiler it was built for, and `swift sdk list` does not
+    /// say which one that is, so match its id to the toolchain's tag in
+    /// `swift --version`, such as `swift-6.3-RELEASE`.
     private func defaultWasmSDK(swift: URL) throws -> String {
         let sdks = try run(swift, ["sdk", "list"], captureOutput: true)
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
-        if let sdk = sdks.first(where: { $0.hasSuffix("_wasm") }) {
+            .filter { $0.hasSuffix("_wasm") }
+        let version = (try? run(swift, ["--version"], captureOutput: true, includeStandardError: true)) ?? ""
+        return try Self.wasmSDK(from: sdks, swiftVersion: version)
+    }
+
+    static func wasmSDK(from sdks: [String], swiftVersion: String) throws -> String {
+        let tags = swiftVersion
+            .split(whereSeparator: { $0.isWhitespace || $0 == "(" || $0 == ")" })
+            .map(String.init)
+            .filter { $0.hasPrefix("swift-") }
+        if let sdk = tags.lazy.map({ "\($0)_wasm" }).first(where: { sdks.contains($0) }) {
             return sdk
         }
+        if sdks.count == 1 {
+            return sdks[0]
+        }
+        if sdks.isEmpty {
+            throw WorkerBuildError(
+                "no Swift WebAssembly SDK is installed; install the one that matches `swift --version` (see https://www.swift.org/documentation/articles/wasm-getting-started.html) or pass --swift-sdk"
+            )
+        }
         throw WorkerBuildError(
-            "no Swift WebAssembly SDK is installed; install one (see https://www.swift.org/documentation/articles/wasm-getting-started.html) or pass --swift-sdk"
+            "none of the installed Swift WebAssembly SDKs (\(sdks.joined(separator: ", "))) matches `swift --version`; pass --swift-sdk"
         )
     }
 
@@ -329,7 +351,8 @@ struct WorkerBuild: CommandPlugin {
     private func run(
         _ executable: URL,
         _ arguments: [String],
-        captureOutput: Bool = false
+        captureOutput: Bool = false,
+        includeStandardError: Bool = false
     ) throws -> String {
         let process = Process()
         process.executableURL = executable
@@ -337,6 +360,9 @@ struct WorkerBuild: CommandPlugin {
         let pipe = Pipe()
         if captureOutput {
             process.standardOutput = pipe
+            if includeStandardError {
+                process.standardError = pipe
+            }
         }
         try process.run()
         let output = captureOutput ? pipe.fileHandleForReading.readDataToEndOfFile() : Data()

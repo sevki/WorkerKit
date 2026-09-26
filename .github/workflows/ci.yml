@@ -26,12 +26,12 @@ jobs:
             "https://download.swift.org/${lower}/wasm-sdk/${tag}/${tag}_wasm.artifactbundle.tar.gz"
           swift sdk install /tmp/wasm-sdk.artifactbundle.tar.gz
           swift sdk list
-          echo "SWIFT_SDK=${tag}_wasm" >> "$GITHUB_ENV"
 
+      # Without --swift-sdk, so the plugin picks the SDK that matches the
+      # toolchain itself.
       - name: swift package worker-build
         run: |
-          swift package --allow-writing-to-package-directory \
-            worker-build --swift-sdk "$SWIFT_SDK" -c release
+          swift package --allow-writing-to-package-directory worker-build -c release
           ls -l build/worker
 
       - uses: actions/upload-artifact@v4

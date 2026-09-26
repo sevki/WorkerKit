@@ -49,7 +49,7 @@ struct WorkerBuild: CommandPlugin {
 
         // A separate scratch path keeps the nested build off the lock that
         // `swift package` holds on the package's own .build directory.
-        let buildArguments = [
+        var buildArguments = [
             "build",
             "--package-path", packageDirectory.path(),
             "--scratch-path", context.pluginWorkDirectoryURL.appending(path: "wasm").path(),
@@ -58,6 +58,12 @@ struct WorkerBuild: CommandPlugin {
             "--product", product,
             "-Xswiftc", "-Xclang-linker", "-Xswiftc", "-mexec-model=reactor",
         ]
+        if sdk.hasSuffix("-embedded") {
+            // Embedded Swift keeps String's Unicode tables (comparison,
+            // hashing, case mapping) in a library that must be linked
+            // explicitly.
+            buildArguments += ["-Xlinker", "-lswiftUnicodeDataTables"]
+        }
 
         print("worker-build: building \(product) with Swift SDK \(sdk) (\(configuration))")
         try run(swift, buildArguments)

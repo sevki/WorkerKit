@@ -86,6 +86,29 @@ private struct StoredWasmResponse: Sendable {
     }
 }
 
+/// A header name must be a non-empty RFC 9110 token, which is what the Fetch
+/// `Headers` class accepts.
+func isValidHeaderName(_ name: String) -> Bool {
+    !name.isEmpty && name.utf8.allSatisfy { byte in
+        switch byte {
+        case UInt8(ascii: "a")...UInt8(ascii: "z"),
+             UInt8(ascii: "A")...UInt8(ascii: "Z"),
+             UInt8(ascii: "0")...UInt8(ascii: "9"):
+            return true
+        default:
+            return "!#$%&'*+-.^_`|~".utf8.contains(byte)
+        }
+    }
+}
+
+/// `Headers` values are JavaScript ByteStrings: every character must be at
+/// most U+00FF, and NUL, CR, and LF are rejected.
+func isValidHeaderValue(_ value: String) -> Bool {
+    value.unicodeScalars.allSatisfy { scalar in
+        scalar.value <= 0xFF && scalar != "\0" && scalar != "\n" && scalar != "\r"
+    }
+}
+
 func encodeHeaders(_ headers: [String: String]) -> [UInt8] {
     var bytes: [UInt8] = []
     for (name, value) in headers {
@@ -153,8 +176,8 @@ enum WasmResponseStore {
             storedResponse = .error("Response too large for ABI")
         } else if !validStatuses.contains(response.status) {
             storedResponse = .error("Response status out of range for ABI")
-        } else if response.headers.contains(where: { $0.key.utf8.contains(0) || $0.value.utf8.contains(0) }) {
-            storedResponse = .error("Response header contains NUL")
+        } else if !response.headers.allSatisfy({ isValidHeaderName($0.key) && isValidHeaderValue($0.value) }) {
+            storedResponse = .error("Response header is not a valid HTTP header")
         } else {
             storedResponse = StoredWasmResponse(status: Int32(response.status), headers: headers, body: body)
         }

@@ -196,7 +196,9 @@ export function createWorkerHandler(source = wasmModule, hostImports = {}) {
         const headers = decodeHeaders(readCopiedBytes(instance, handle, "headers"));
         const body = readCopiedBytes(instance, handle, "body");
 
-        return new Response(body, { status, headers });
+        // Response rejects any body, even an empty one, for these statuses.
+        const bodyless = status === 204 || status === 205 || status === 304;
+        return new Response(bodyless ? null : body, { status, headers });
       } finally {
         freeString(instance, method);
         freeString(instance, path);

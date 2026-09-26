@@ -23,6 +23,7 @@ jobs:
 
       - name: Install the Swift SDK for WebAssembly that matches the toolchain
         run: |
+          apt-get update -q && apt-get install -y -q --no-install-recommends curl ca-certificates
           tag=$(swift --version 2>&1 | grep -o 'swift-[0-9.]*-RELEASE' | head -n 1)
           test -n "$tag"
           lower=$(echo "$tag" | tr '[:upper:]' '[:lower:]')

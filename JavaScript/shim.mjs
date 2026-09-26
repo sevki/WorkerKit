@@ -11,6 +11,31 @@ const WASI_EBADF = 8;
 const WASI_EINVAL = 28;
 const WASI_ENOSYS = 52;
 
+// stdout and stderr are byte streams across fd_write calls: a UTF-8 sequence
+// or a line may span several writes. Each keeps its own decoder and logs only
+// complete lines.
+class ConsoleStream {
+  constructor(log) {
+    this.log = log;
+    this.decoder = new TextDecoder();
+    this.pending = "";
+  }
+
+  write(bytes) {
+    this.pending += this.decoder.decode(bytes, { stream: true });
+    const lines = this.pending.split("\n");
+    this.pending = lines.pop();
+    for (const line of lines) {
+      this.log(line);
+    }
+  }
+}
+
+const streams = {
+  1: new ConsoleStream((line) => console.log(line)),
+  2: new ConsoleStream((line) => console.error(line)),
+};
+
 // Workers runtimes provide no WASI. Give the Swift runtime the few calls it
 // makes and stub every other import the module declares.
 function buildImportObject(module, swift, getMemory) {
@@ -46,21 +71,17 @@ function buildImportObject(module, swift, getMemory) {
       return 0;
     },
     fd_write(fd, iovs, iovsLength, writtenPointer) {
-      if (fd !== 1 && fd !== 2) {
+      const stream = streams[fd];
+      if (!stream) {
         return WASI_EBADF;
       }
-      // The iovecs form one byte stream: a UTF-8 sequence may span two.
-      const streamDecoder = new TextDecoder();
-      let text = "";
       let written = 0;
       for (let index = 0; index < iovsLength; index += 1) {
         const pointer = view().getUint32(iovs + index * 8, true);
         const length = view().getUint32(iovs + index * 8 + 4, true);
-        text += streamDecoder.decode(new Uint8Array(getMemory().buffer, pointer, length), { stream: true });
+        stream.write(new Uint8Array(getMemory().buffer, pointer, length));
         written += length;
       }
-      text += streamDecoder.decode();
-      (fd === 2 ? console.error : console.log)(text.replace(/\n$/, ""));
       view().setUint32(writtenPointer, written, true);
       return 0;
     },

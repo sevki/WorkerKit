@@ -23,6 +23,11 @@ public enum WorkersRuntime {
                 do {
                     return try await handler(request, env, context).jsValue
                 } catch {
+                    // The runtime can only forward to the origin if it sees
+                    // the exception.
+                    if context.passThroughRequested {
+                        throw (error as? JSException) ?? JSException(message: "\(error)")
+                    }
                     _ = JSObject.global.console.object!.error!("Swift worker threw:", "\(error)")
                     return Response.error("Internal Server Error", 500).jsValue
                 }

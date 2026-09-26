@@ -106,6 +106,19 @@ for (const runtime of runtimes) {
       assert.equal(next.body, "ok");
     });
 
+    // Only workerd is known to print worker console output to its own stdout.
+    test("stdout survives writes that split a character and a line", { skip: runtime !== "workerd" }, async () => {
+      const result = await request("/log");
+      assertNotCrashed(result, "/log");
+      const deadline = Date.now() + 5_000;
+      while (!server.output.join("").includes("split:") && Date.now() < deadline) {
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+      }
+      const output = server.output.join("");
+      assert.match(output, /split: café done/);
+      assert.doesNotMatch(output, /split: caf\n/);
+    });
+
     test("concurrent async requests each complete", async () => {
       const expected = createHash("sha256").update("hello").digest("hex");
       const results = await Promise.all(Array.from({ length: 20 }, () => request("/digest")));

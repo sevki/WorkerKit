@@ -24,8 +24,14 @@ public final class Context: @unchecked Sendable {
         }))
     }
 
+    /// Whether the handler called `passThroughOnException()`.
+    public private(set) var passThroughRequested = false
+
     /// Forwards the request to the origin if the worker throws an exception.
+    /// After this call, an error thrown by the handler reaches the runtime as
+    /// an exception instead of becoming a 500 response.
     public func passThroughOnException() {
+        passThroughRequested = true
         _ = jsObject?.passThroughOnException?()
     }
 }

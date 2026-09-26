@@ -1,6 +1,14 @@
 import JavaScriptKit
 import WorkersSwift
 
+#if canImport(WASILibc)
+import WASILibc
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
+
 @Event(.fetch)
 func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
     switch (req.method, req.path) {
@@ -29,6 +37,15 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
             bytes.map { ($0 < 16 ? "0" : "") + String($0, radix: 16) }.joined()
         }
         return .ok(hex)
+
+    case ("GET", "/log"):
+        // Writes "split: café done\n" to stdout in three unbuffered writes,
+        // splitting both the "é" and the line across fd_write calls.
+        let bytes = Array("split: café done\n".utf8)
+        for chunk in [bytes[..<11], bytes[11..<12], bytes[12...]] {
+            _ = chunk.withUnsafeBufferPointer { write(1, $0.baseAddress, $0.count) }
+        }
+        return .ok("logged")
 
     case ("GET", "/no-content"):
         return .empty()

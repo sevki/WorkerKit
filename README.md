@@ -6,7 +6,7 @@ A tiny Swift starting point for a `workers-rs`-style project that can be compile
 
 - `Sources/WorkersSwift/WorkersSwift.swift` contains the request/response types, the `@Event` macro declaration, and the Wasm ABI exports. It does not use Foundation, so it also builds with the Embedded Swift Wasm SDK.
 - `Sources/WorkersSwiftMacros` implements `@Event`.
-- `Sources/WorkersSwiftWasm` is an example worker; `worker-build` links it into `WorkersSwift.wasm`.
+- `Sources/HelloWorker` is an example worker, and `Sources/WorkersSwiftWasm` is the executable that `worker-build` links it into as `WorkersSwift.wasm`.
 - `Plugins/WorkerBuild` is the `swift package worker-build` command plugin, the Swift counterpart of workers-rs' `worker-build`.
 - `Examples/workerd-celld/worker.mjs` is the JavaScript shim that instantiates the Swift WebAssembly module and forwards `fetch` requests into Swift.
 - `Tests/WorkersSwiftTests` covers the Swift request handling and ABI behavior.

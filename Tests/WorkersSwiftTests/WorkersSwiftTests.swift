@@ -1,6 +1,6 @@
 import Testing
 @testable import WorkersSwift
-@testable import WorkersSwiftWasm
+@testable import HelloWorker
 
 @Test func rootRequestReturnsHelloMessage() async throws {
     let response = fetch(.init(method: "GET", path: "/"))

@@ -41,9 +41,15 @@ let package = Package(
             name: "WorkersSwift",
             dependencies: ["WorkersSwiftMacros"]
         ),
+        // The example worker. It is a library so tests can import it;
+        // WorkersSwiftWasm links it into WorkersSwift.wasm.
+        .target(
+            name: "HelloWorker",
+            dependencies: ["WorkersSwift"]
+        ),
         .executableTarget(
             name: "WorkersSwiftWasm",
-            dependencies: ["WorkersSwift"]
+            dependencies: ["HelloWorker"]
         ),
         .plugin(
             name: "WorkerBuild",
@@ -59,7 +65,7 @@ let package = Package(
         ),
         .testTarget(
             name: "WorkersSwiftTests",
-            dependencies: ["WorkersSwift", "WorkersSwiftWasm"]
+            dependencies: ["WorkersSwift", "HelloWorker"]
         ),
         .testTarget(
             name: "WorkersSwiftMacrosTests",

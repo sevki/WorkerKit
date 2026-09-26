@@ -26,16 +26,47 @@ public struct WorkerResponse: Sendable, Equatable {
     }
 }
 
-public enum WorkersSwiftApp {
-    public static func handle(_ request: WorkerRequest) -> WorkerResponse {
-        switch (request.method.uppercased(), request.path) {
-        case ("GET", "/"):
-            return WorkerResponse(status: 200, body: "Hello from Swift on workerd/celld")
-        case ("GET", "/health"):
-            return WorkerResponse(status: 200, body: "ok")
-        default:
-            return WorkerResponse(status: 404, body: "Not Found")
+/// The events a worker can handle.
+public enum WorkerEvent {
+    /// An HTTP request, delivered through the Worker `fetch` handler.
+    case fetch
+}
+
+/// Marks a top-level function as the worker's handler for `event`.
+///
+///     @Event(.fetch)
+///     func fetch(_ request: WorkerRequest) -> WorkerResponse {
+///         WorkerResponse(status: 200, body: "Hello")
+///     }
+///
+/// The function may be `throws`; an error becomes a 500 response. The macro
+/// generates the `workers_handle_request` Wasm export, so a module can have
+/// only one `@Event(.fetch)` function.
+@attached(peer, names: named(__workersSwift_fetch))
+public macro Event(_ event: WorkerEvent) = #externalMacro(module: "WorkersSwiftMacros", type: "EventMacro")
+
+/// The ABI entry points that `@Event` expansions call.
+public enum WorkersRuntime {
+    /// Decodes a request passed through the Wasm ABI, runs `handler`, and
+    /// stores its response. Returns the response handle, or 0 when the
+    /// method or path is malformed.
+    public static func handleRequest(
+        _ methodPointer: UnsafePointer<UInt8>?,
+        _ methodLength: Int32,
+        _ pathPointer: UnsafePointer<UInt8>?,
+        _ pathLength: Int32,
+        handler: (WorkerRequest) -> WorkerResponse
+    ) -> Int32 {
+        guard methodLength >= 0, pathLength >= 0,
+              hasValidABIString(methodPointer, methodLength),
+              hasValidABIString(pathPointer, pathLength),
+              let method = decodeUTF8(methodPointer, methodLength),
+              let path = decodeUTF8(pathPointer, pathLength) else {
+            return 0
         }
+
+        let response = handler(WorkerRequest(method: method, path: path))
+        return WasmResponseStore.store(response)
     }
 }
 
@@ -212,33 +243,6 @@ public func workers_free(_ pointer: UnsafeMutableRawPointer?, _ size: Int32, _ a
     }
 
     pointer.deallocate()
-}
-
-#if arch(wasm32)
-@_expose(wasm, "workers_handle_request")
-#endif
-@_cdecl("workers_handle_request")
-public func workers_handle_request(
-    _ methodPointer: UnsafePointer<UInt8>?,
-    _ methodLength: Int32,
-    _ pathPointer: UnsafePointer<UInt8>?,
-    _ pathLength: Int32
-) -> Int32 {
-    guard methodLength >= 0, pathLength >= 0,
-          hasValidABIString(methodPointer, methodLength),
-          hasValidABIString(pathPointer, pathLength),
-          let method = decodeUTF8(methodPointer, methodLength),
-          let path = decodeUTF8(pathPointer, pathLength) else {
-        return 0
-    }
-
-    let request = WorkerRequest(
-        method: method,
-        path: path
-    )
-
-    let response = WorkersSwiftApp.handle(request)
-    return WasmResponseStore.store(response)
 }
 
 #if arch(wasm32)

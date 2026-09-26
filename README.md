@@ -4,12 +4,33 @@ A tiny Swift starting point for a `workers-rs`-style project that can be compile
 
 ## What is in this repository?
 
-- `Sources/WorkersSwift/WorkersSwift.swift` contains a minimal Workers-style request/response core and the Wasm ABI exports. It does not use Foundation, so it also builds with the Embedded Swift Wasm SDK.
-- `Sources/WorkersSwiftWasm` is the executable module that links into `WorkersSwift.wasm`.
+- `Sources/WorkersSwift/WorkersSwift.swift` contains the request/response types, the `@Event` macro declaration, and the Wasm ABI exports. It does not use Foundation, so it also builds with the Embedded Swift Wasm SDK.
+- `Sources/WorkersSwiftMacros` implements `@Event`.
+- `Sources/WorkersSwiftWasm` is an example worker; `worker-build` links it into `WorkersSwift.wasm`.
 - `Plugins/WorkerBuild` is the `swift package worker-build` command plugin, the Swift counterpart of workers-rs' `worker-build`.
 - `Examples/workerd-celld/worker.mjs` is the JavaScript shim that instantiates the Swift WebAssembly module and forwards `fetch` requests into Swift.
 - `Tests/WorkersSwiftTests` covers the Swift request handling and ABI behavior.
 - `Tests/e2e` serves the shim from real `workerd` and `celld` processes and sends HTTP requests to it.
+
+## Writing a worker
+
+Like workers-rs' `#[event(fetch)]`, mark one top-level function in an executable target with `@Event(.fetch)`:
+
+```swift
+import WorkersSwift
+
+@Event(.fetch)
+func fetch(_ request: WorkerRequest) -> WorkerResponse {
+    switch (request.method.uppercased(), request.path) {
+    case ("GET", "/"):
+        return WorkerResponse(status: 200, body: "Hello from Swift on workerd/celld")
+    default:
+        return WorkerResponse(status: 404, body: "Not Found")
+    }
+}
+```
+
+The macro generates the `workers_handle_request` export that the JavaScript shim calls for each request, so a module has exactly one `@Event(.fetch)` function. The function may `throw`; an error becomes a `500 Internal Server Error` response. `async` handlers are not supported yet.
 
 ## Native development
 

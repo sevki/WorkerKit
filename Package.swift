@@ -1,6 +1,7 @@
 // swift-tools-version: 6.3
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
+import CompilerPluginSupport
 import PackageDescription
 
 let package = Package(
@@ -13,7 +14,7 @@ let package = Package(
             name: "WorkersSwift",
             targets: ["WorkersSwift"]
         ),
-        // The module that `swift package worker-build` links into WorkersSwift.wasm.
+        // An example worker; `swift package worker-build` links it into WorkersSwift.wasm.
         .executable(
             name: "WorkersSwiftWasm",
             targets: ["WorkersSwiftWasm"]
@@ -23,11 +24,22 @@ let package = Package(
             targets: ["WorkerBuild"]
         ),
     ],
+    dependencies: [
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", "600.0.0"..<"700.0.0"),
+    ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
+        .macro(
+            name: "WorkersSwiftMacros",
+            dependencies: [
+                .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
+                .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
+            ]
+        ),
         .target(
-            name: "WorkersSwift"
+            name: "WorkersSwift",
+            dependencies: ["WorkersSwiftMacros"]
         ),
         .executableTarget(
             name: "WorkersSwiftWasm",
@@ -47,7 +59,14 @@ let package = Package(
         ),
         .testTarget(
             name: "WorkersSwiftTests",
-            dependencies: ["WorkersSwift"]
+            dependencies: ["WorkersSwift", "WorkersSwiftWasm"]
+        ),
+        .testTarget(
+            name: "WorkersSwiftMacrosTests",
+            dependencies: [
+                "WorkersSwiftMacros",
+                .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
+            ]
         ),
     ],
     swiftLanguageModes: [.v6]

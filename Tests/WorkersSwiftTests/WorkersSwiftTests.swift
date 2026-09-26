@@ -1,8 +1,9 @@
 import Testing
 @testable import WorkersSwift
+@testable import WorkersSwiftWasm
 
 @Test func rootRequestReturnsHelloMessage() async throws {
-    let response = WorkersSwiftApp.handle(.init(method: "GET", path: "/"))
+    let response = fetch(.init(method: "GET", path: "/"))
 
     #expect(response.status == 200)
     #expect(response.body == "Hello from Swift on workerd/celld")
@@ -10,28 +11,28 @@ import Testing
 }
 
 @Test func healthRequestReturnsOk() async throws {
-    let response = WorkersSwiftApp.handle(.init(method: "GET", path: "/health"))
+    let response = fetch(.init(method: "GET", path: "/health"))
 
     #expect(response.status == 200)
     #expect(response.body == "ok")
 }
 
 @Test func unknownRouteReturnsNotFound() async throws {
-    let response = WorkersSwiftApp.handle(.init(method: "POST", path: "/missing"))
+    let response = fetch(.init(method: "POST", path: "/missing"))
 
     #expect(response.status == 404)
     #expect(response.body == "Not Found")
 }
 
 @Test func lowercaseMethodStillMatchesRoute() async throws {
-    let response = WorkersSwiftApp.handle(.init(method: "get", path: "/health"))
+    let response = fetch(.init(method: "get", path: "/health"))
 
     #expect(response.status == 200)
     #expect(response.body == "ok")
 }
 
 @Test func mixedCaseNonGetMethodStillMissesGetRoute() async throws {
-    let response = WorkersSwiftApp.handle(.init(method: "PoSt", path: "/health"))
+    let response = fetch(.init(method: "PoSt", path: "/health"))
 
     #expect(response.status == 404)
     #expect(response.body == "Not Found")
@@ -43,7 +44,7 @@ import Testing
 
     let handle = method.withUnsafeBufferPointer { methodBuffer in
         path.withUnsafeBufferPointer { pathBuffer in
-            workers_handle_request(
+            __workersSwift_fetch(
                 methodBuffer.baseAddress,
                 Int32(methodBuffer.count),
                 pathBuffer.baseAddress,
@@ -92,7 +93,7 @@ import Testing
     let method = Array("GET".utf8)
 
     let handle = method.withUnsafeBufferPointer { methodBuffer in
-        workers_handle_request(methodBuffer.baseAddress, -1, nil, 0)
+        __workersSwift_fetch(methodBuffer.baseAddress, -1, nil, 0)
     }
 
     #expect(handle == 0)
@@ -127,23 +128,45 @@ import Testing
 }
 
 @Test func wasmRequestRejectsMissingPointerForPositiveLength() async throws {
-    #expect(workers_handle_request(nil, 1, nil, 0) == 0)
+    #expect(__workersSwift_fetch(nil, 1, nil, 0) == 0)
 }
 
 @Test func wasmRequestRejectsInvalidUtf8() async throws {
     let invalidMethod: [UInt8] = [0xFF]
 
     let handle = invalidMethod.withUnsafeBufferPointer { methodBuffer in
-        workers_handle_request(methodBuffer.baseAddress, Int32(methodBuffer.count), nil, 0)
+        __workersSwift_fetch(methodBuffer.baseAddress, Int32(methodBuffer.count), nil, 0)
     }
 
     #expect(handle == 0)
 }
 
 @Test func wasmRequestAllowsMissingZeroLengthBuffers() async throws {
-    let handle = workers_handle_request(nil, 0, nil, 0)
+    let handle = __workersSwift_fetch(nil, 0, nil, 0)
 
     #expect(handle > 0)
     #expect(workers_response_status(handle) == 404)
+    workers_response_release(handle)
+}
+
+@Test func runtimePassesDecodedRequestToHandler() async throws {
+    let method = Array("PATCH".utf8)
+    let path = Array("/caf\u{e9}".utf8)
+
+    let handle = method.withUnsafeBufferPointer { methodBuffer in
+        path.withUnsafeBufferPointer { pathBuffer in
+            WorkersRuntime.handleRequest(
+                methodBuffer.baseAddress,
+                Int32(methodBuffer.count),
+                pathBuffer.baseAddress,
+                Int32(pathBuffer.count)
+            ) { request in
+                WorkerResponse(status: 201, body: "\(request.method) \(request.path)")
+            }
+        }
+    }
+
+    #expect(workers_response_status(handle) == 201)
+    #expect(workers_response_body_len(handle) == Int32("PATCH /caf\u{e9}".utf8.count))
     workers_response_release(handle)
 }

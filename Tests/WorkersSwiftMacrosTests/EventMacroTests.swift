@@ -378,4 +378,36 @@ final class EventMacroTests: XCTestCase {
             macros: macros
         )
     }
+
+    func testDurableObjectRejectsOverloadedRPCMethods() {
+        assertMacroExpansion(
+            """
+            @DurableObject
+            final class Directory {
+                @RPC func lookup(_ id: Int) {
+                }
+
+                @RPC func lookup(_ name: String) {
+                }
+            }
+            """,
+            expandedSource: """
+            final class Directory {
+                func lookup(_ id: Int) {
+                }
+
+                func lookup(_ name: String) {
+                }
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@RPC method lookup is overloaded; RPC methods are called by name, so each needs a unique name",
+                    line: 1,
+                    column: 1
+                ),
+            ],
+            macros: macros
+        )
+    }
 }

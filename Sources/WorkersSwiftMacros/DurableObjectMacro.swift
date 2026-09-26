@@ -34,6 +34,14 @@ public struct DurableObjectMacro: PeerMacro, ExtensionMacro {
                 "@RPC method name \(invalid.name.text) must also be a JavaScript method name (ASCII letters, digits, _ and $)"
             )
         }
+        // RPC dispatches by name alone, so overloads cannot be told apart
+        // (and would be duplicate keys in the generated table).
+        var seen = Set<String>()
+        if let duplicate = rpcMethods.first(where: { !seen.insert($0.name.text).inserted }) {
+            throw MacroExpansionErrorMessage(
+                "@RPC method \(duplicate.name.text) is overloaded; RPC methods are called by name, so each needs a unique name"
+            )
+        }
         // The generated JavaScript class defines these methods itself, and
         // its DurableObject base class sets `ctx` and `env` as instance
         // fields, which would hide methods of the same name.

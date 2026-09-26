@@ -33,6 +33,7 @@ for (const runtime of runtimes) {
       }, "WorkersSwift.wasm", {
         vars: { GREETING: "hello from env" },
         durableObjects: { COUNTER: "Counter" },
+        selfBinding: "SELF",
       });
     });
 
@@ -130,6 +131,12 @@ for (const runtime of runtimes) {
         await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
       }
       assert.match(server.output.join(""), /unterminated output/);
+    });
+
+    test("a top-level @RPC function is callable through a service binding", async () => {
+      const result = await request("/rpc/add");
+      assertNotCrashed(result, "/rpc/add");
+      assert.equal(result.body, "5");
     });
 
     test("Durable Object RPC and fetch share the object's storage", async () => {

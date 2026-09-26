@@ -1,7 +1,8 @@
 // The Worker entry point for a Swift worker. `swift package worker-build`
 // writes it to build/worker/worker.mjs after JavaScriptKit's runtime.mjs
 // (which defines SwiftRuntime), because celld's no_bundle mode takes a single
-// JavaScript file.
+// JavaScript file, and appends the default export and any Durable Object
+// classes, generated from the module's exports.
 //
 // workerd and celld (like Wrangler) resolve a `.wasm` import to a compiled
 // `WebAssembly.Module`.
@@ -160,13 +161,16 @@ async function start() {
   swift.setInstance(instance);
 
   // A reactor module does not export `main`, so SwiftRuntime.main() would not
-  // reach Swift. Instead, `@Event(.fetch)` generates `workers_js_main`, which
-  // registers globalThis.__workersSwiftFetch, and each `@DurableObject` class
-  // generates a `workers_do:<Class>` export, which registers its factory in
-  // globalThis.__workersSwiftDurableObjects.
+  // reach Swift. Instead:
+  // - `@Event(.fetch)` generates `workers_js_main`, which registers
+  //   globalThis.__workersSwiftFetch;
+  // - each `@DurableObject` class generates a `workers_do:<Class>` export,
+  //   which registers its factory in globalThis.__workersSwiftDurableObjects;
+  // - each top-level `@RPC` function generates a `workers_rpc:<name>` export,
+  //   which registers it in globalThis.__workersSwiftRPC.
   instance.exports.workers_js_main?.();
   for (const [name, value] of Object.entries(instance.exports)) {
-    if (name.startsWith("workers_do:") && typeof value === "function") {
+    if ((name.startsWith("workers_do:") || name.startsWith("workers_rpc:")) && typeof value === "function") {
       value();
     }
   }
@@ -198,13 +202,24 @@ async function __workersSwiftDurableObject(name, ctx, env) {
   };
 }
 
-export default {
-  async fetch(request, env, ctx) {
-    await ensureStarted();
-    const handler = globalThis.__workersSwiftFetch;
-    if (typeof handler !== "function") {
-      throw new Error("The Swift worker has no @Event(.fetch) function");
-    }
-    return flushingConsole(() => handler(request, env, ctx));
-  },
-};
+// The worker's fetch handler. `worker-build` appends the default export that
+// calls it, as a plain object or, when the worker has top-level `@RPC`
+// functions, as a WorkerEntrypoint class.
+async function __workersSwiftFetch(request, env, ctx) {
+  await ensureStarted();
+  const handler = globalThis.__workersSwiftFetch;
+  if (typeof handler !== "function") {
+    throw new Error("The Swift worker has no @Event(.fetch) function");
+  }
+  return flushingConsole(() => handler(request, env, ctx));
+}
+
+// Calls the top-level `@RPC` function `name`.
+async function __workersSwiftRPC(name, args) {
+  await ensureStarted();
+  const rpc = globalThis.__workersSwiftRPC?.[name];
+  if (typeof rpc !== "function") {
+    throw new Error(`The Swift worker has no @RPC function ${name}`);
+  }
+  return flushingConsole(() => rpc(args));
+}

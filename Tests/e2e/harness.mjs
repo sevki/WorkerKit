@@ -31,8 +31,9 @@ function freePort() {
 }
 
 const launchers = {
-  async workerd(directory, port, wasmName, { vars, durableObjects }) {
+  async workerd(directory, port, wasmName, { vars, durableObjects, selfBinding }) {
     const bindings = [
+      ...(selfBinding ? [`(name = ${JSON.stringify(selfBinding)}, service = "main")`] : []),
       ...Object.entries(vars)
         .map(([name, value]) => `(name = ${JSON.stringify(name)}, text = ${JSON.stringify(value)})`),
       ...Object.entries(durableObjects)
@@ -64,7 +65,7 @@ const worker :Workerd.Worker = (
     return [binary, ["serve", join(directory, "config.capnp")]];
   },
 
-  async celld(directory, port, _wasmName, { vars, durableObjects }) {
+  async celld(directory, port, _wasmName, { vars, durableObjects, selfBinding }) {
     const classNames = [...new Set(Object.values(durableObjects))];
     await writeFile(join(directory, "wrangler.jsonc"), JSON.stringify({
       name: "workers-swift-e2e",
@@ -76,6 +77,7 @@ const worker :Workerd.Worker = (
         bindings: Object.entries(durableObjects).map(([name, className]) => ({ name, class_name: className })),
       },
       migrations: classNames.length ? [{ tag: "v1", new_sqlite_classes: classNames }] : [],
+      services: selfBinding ? [{ binding: selfBinding, service: "workers-swift-e2e" }] : [],
     }, null, 2));
     const binary = process.env.CELLD_BIN ?? "celld";
     return [binary, ["dev", directory, "--port", String(port), "--logs"]];
@@ -84,8 +86,9 @@ const worker :Workerd.Worker = (
 
 /// Serves `files` ({ "worker.mjs": source, [wasmName]: bytes }) with
 /// `runtime` and resolves once it answers HTTP. `vars` are plain-text env
-/// variables; `durableObjects` maps binding names to Durable Object classes.
-export async function serve(runtime, files, wasmName, { vars = {}, durableObjects = {} } = {}) {
+/// variables; `durableObjects` maps binding names to Durable Object classes;
+/// `selfBinding` names a service binding to the worker itself.
+export async function serve(runtime, files, wasmName, { vars = {}, durableObjects = {}, selfBinding } = {}) {
   const launch = launchers[runtime];
   if (!launch) {
     throw new Error(`unknown runtime ${runtime}`);
@@ -97,7 +100,7 @@ export async function serve(runtime, files, wasmName, { vars = {}, durableObject
   }
 
   const port = await freePort();
-  const [command, args] = await launch(directory, port, wasmName, { vars, durableObjects });
+  const [command, args] = await launch(directory, port, wasmName, { vars, durableObjects, selfBinding });
   const child = spawn(command, args, { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
   const output = [];
   child.stdout.on("data", (chunk) => output.push(chunk.toString()));

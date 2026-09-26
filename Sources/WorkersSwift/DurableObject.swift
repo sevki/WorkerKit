@@ -104,8 +104,15 @@ public final class DurableObjectNamespace: @unchecked Sendable {
 }
 
 /// A client for one Durable Object.
-public final class DurableObjectStub: @unchecked Sendable {
-    /// The underlying JavaScript `DurableObjectStub`.
+public final class DurableObjectStub: RPCStub {}
+
+/// A service binding, such as `services` in wrangler.jsonc: calls another
+/// worker's `@RPC` functions and `fetch` handler.
+public final class Fetcher: RPCStub {}
+
+/// A JavaScript RPC stub: a Durable Object stub or a service binding.
+public class RPCStub: @unchecked Sendable {
+    /// The underlying JavaScript stub.
     public let jsObject: JSObject
 
     public init(_ jsObject: JSObject) {
@@ -119,7 +126,7 @@ public final class DurableObjectStub: @unchecked Sendable {
         _ arguments: any ConvertibleToJSValue...,
         as type: T.Type = T.self
     ) async throws -> T {
-        let value = try await callValue(method, arguments)
+        let value = try await awaitValue(invoke(method, arguments))
         guard let result = T.construct(from: value) else {
             throw JSException(message: "RPC method \(method) returned \(value), not a \(T.self)")
         }
@@ -128,23 +135,19 @@ public final class DurableObjectStub: @unchecked Sendable {
 
     /// Calls the `@RPC` method `method`, ignoring its result.
     public func call(_ method: String, _ arguments: any ConvertibleToJSValue...) async throws {
-        _ = try await callValue(method, arguments)
+        _ = try await awaitValue(invoke(method, arguments))
     }
 
-    /// Sends a request to the object's `fetch` handler.
+    /// Sends a request to the target's `fetch` handler.
     public func fetch(_ url: String) async throws -> FetchResponse {
         let response = try await awaitValue(invoke("fetch", [url]))
         return FetchResponse(response.object!)
     }
 
-    private func callValue(_ method: String, _ arguments: [any ConvertibleToJSValue]) async throws -> JSValue {
-        try await awaitValue(invoke(method, arguments))
-    }
-
     /// Calls `stub[method](...arguments)` through `Reflect.apply`. JavaScriptKit
     /// calls functions with `function.apply(this, arguments)`, but on a
     /// workerd stub every property of an RPC method is itself a remote call,
-    /// so `.apply` would be sent to the Durable Object as a method call.
+    /// so `.apply` would be sent to the target as a method call.
     private func invoke(_ method: String, _ arguments: [any ConvertibleToJSValue]) -> JSValue {
         let argumentList = JSObject.global.Array.object!.new()
         for argument in arguments {

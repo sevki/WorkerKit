@@ -105,6 +105,29 @@ public enum WorkersRuntime {
         JSObject.global.__workersSwiftDurableObjects.object![name] = .object(factory)
     }
 
+    /// Registers the top-level `@RPC` function `name` in
+    /// `globalThis.__workersSwiftRPC`, from where the worker's default
+    /// `WorkerEntrypoint` class calls it with the JavaScript arguments.
+    public static func registerRPC(name: String, _ function: @escaping @Sendable ([JSValue]) async throws -> JSValue) {
+        JavaScriptEventLoop.installGlobalExecutor()
+
+        let entryPoint = JSClosure { arguments in
+            let rpcArguments = arguments.first.flatMap { $0.object }.flatMap(JSArray.init).map { Array($0) } ?? []
+            return JSPromise.async { () async throws(JSException) -> JSValue in
+                do {
+                    return try await function(rpcArguments)
+                } catch {
+                    throw (error as? JSException) ?? JSException(message: "\(error)")
+                }
+            }.jsValue
+        }
+
+        if JSObject.global.__workersSwiftRPC.isUndefined {
+            JSObject.global.__workersSwiftRPC = .object(JSObject())
+        }
+        JSObject.global.__workersSwiftRPC.object![name] = .object(entryPoint)
+    }
+
     /// Converts argument `index` of an `@RPC` call to `T`.
     public static func rpcArgument<T: ConstructibleFromJSValue>(
         _ arguments: [JSValue],

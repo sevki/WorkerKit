@@ -87,9 +87,14 @@ struct WorkerBuild: CommandPlugin {
             try fileManager.removeItem(at: wasmDestination)
         }
         try fileManager.copyItem(at: wasm, to: wasmDestination)
-        let durableObjects = try durableObjectExports(inWasm: wasm)
-        try (bundle(runtime: runtime, shim: shim) + durableObjectClasses(durableObjects))
+        let exports = try wasmExportNames(Array(Data(contentsOf: wasm)))
+        let durableObjects = try durableObjectExports(exports)
+        let rpcFunctions = try rpcExports(exports)
+        try (bundle(runtime: runtime, shim: shim) + entryPoints(rpcFunctions: rpcFunctions, durableObjects: durableObjects))
             .write(to: outputDirectory.appending(path: "worker.mjs"), atomically: true, encoding: .utf8)
+        if !rpcFunctions.isEmpty {
+            print("worker-build: WorkerEntrypoint RPC: \(rpcFunctions.joined(separator: ", "))")
+        }
         for (name, methods) in durableObjects {
             print("worker-build: Durable Object \(name)\(methods.isEmpty ? "" : " (RPC: \(methods.joined(separator: ", ")))")")
         }
@@ -162,34 +167,78 @@ struct WorkerBuild: CommandPlugin {
 
     /// The `@DurableObject` classes and their `@RPC` methods, from the
     /// `workers_do:<Class>[:<method>,<method>…]` exports of the module.
-    private func durableObjectExports(inWasm url: URL) throws -> [(name: String, methods: [String])] {
-        try wasmExportNames(Array(Data(contentsOf: url)))
+    private func durableObjectExports(_ exports: [String]) throws -> [(name: String, methods: [String])] {
+        try exports
             .filter { $0.hasPrefix("workers_do:") }
             .map { export in
                 let parts = export.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
                 let methods = parts.count > 2 ? parts[2].split(separator: ",").map(String.init) : []
-                // @DurableObject checks these too; the generated JavaScript
-                // must not be able to break on them.
-                for identifier in [parts[1]] + methods where identifier.range(of: #"^[A-Za-z_$][A-Za-z0-9_$]*$"#, options: .regularExpression) == nil {
-                    throw WorkerBuildError("Durable Object export \(export) has a name that is not a JavaScript identifier")
-                }
+                try checkIdentifiers([parts[1]] + methods, in: export)
                 return (name: parts[1], methods: methods)
             }
     }
 
-    /// One exported JavaScript class per Durable Object. The runtime requires
-    /// a real class, with the RPC methods on its prototype; each method
-    /// forwards to the Swift object created by the shim.
-    private func durableObjectClasses(_ objects: [(name: String, methods: [String])]) -> String {
-        guard !objects.isEmpty else {
-            return ""
+    /// The top-level `@RPC` functions, from the `workers_rpc:<name>` exports.
+    private func rpcExports(_ exports: [String]) throws -> [String] {
+        try exports
+            .filter { $0.hasPrefix("workers_rpc:") }
+            .map { export in
+                let name = String(export.dropFirst("workers_rpc:".count))
+                try checkIdentifiers([name], in: export)
+                return name
+            }
+    }
+
+    /// The macros check these names too; the generated JavaScript must not be
+    /// able to break on them.
+    private func checkIdentifiers(_ identifiers: [String], in export: String) throws {
+        for identifier in identifiers where identifier.range(of: #"^[A-Za-z_$][A-Za-z0-9_$]*$"#, options: .regularExpression) == nil {
+            throw WorkerBuildError("export \(export) has a name that is not a JavaScript identifier")
         }
-        var source = """
+    }
 
-            import { DurableObject as __WorkersSwiftDurableObjectBase } from "cloudflare:workers";
+    /// The module's default export and its Durable Object classes. The runtime
+    /// finds RPC methods on class prototypes, so a worker with top-level
+    /// `@RPC` functions gets a `WorkerEntrypoint` class, each Durable Object
+    /// a `DurableObject` class; every method forwards to Swift.
+    private func entryPoints(rpcFunctions: [String], durableObjects: [(name: String, methods: [String])]) -> String {
+        var imports: [String] = []
+        if !rpcFunctions.isEmpty {
+            imports.append("WorkerEntrypoint as __WorkersSwiftWorkerEntrypoint")
+        }
+        if !durableObjects.isEmpty {
+            imports.append("DurableObject as __WorkersSwiftDurableObjectBase")
+        }
 
-            """
-        for (name, methods) in objects {
+        var source = "\n"
+        if !imports.isEmpty {
+            source += "import { \(imports.joined(separator: ", ")) } from \"cloudflare:workers\";\n"
+        }
+
+        if rpcFunctions.isEmpty {
+            source += "\nexport default { fetch: __workersSwiftFetch };\n"
+        } else {
+            source += """
+
+                export default class extends __WorkersSwiftWorkerEntrypoint {
+                  async fetch(request) {
+                    return __workersSwiftFetch(request, this.env, this.ctx);
+                  }
+
+                """
+            for name in rpcFunctions {
+                source += """
+
+                      async \(name)(...args) {
+                        return __workersSwiftRPC("\(name)", args);
+                      }
+
+                    """
+            }
+            source += "}\n"
+        }
+
+        for (name, methods) in durableObjects {
             source += """
 
                 export class \(name) extends __WorkersSwiftDurableObjectBase {

@@ -40,22 +40,7 @@ public struct DurableObjectMacro: PeerMacro, ExtensionMacro {
         }
 
         let entries = rpcMethods.map { method in
-            let arguments = method.signature.parameterClause.parameters.enumerated().map { index, parameter in
-                let value = "WorkersRuntime.rpcArgument(arguments, \(index), as: \(parameter.type.trimmedDescription).self)"
-                return parameter.firstName.tokenKind == .wildcard ? value : "\(parameter.firstName.text): \(value)"
-            }
-            let effects = method.signature.effectSpecifiers
-            // Converting arguments can throw, so a call with arguments needs
-            // `try` even when the method does not throw.
-            let needsTry = effects?.throwsClause != nil || !arguments.isEmpty
-            let call = (needsTry ? "try " : "")
-                + (effects?.asyncSpecifier != nil ? "await " : "")
-                + "object.\(method.name.text)(\(arguments.joined(separator: ", ")))"
-            let returnType = method.signature.returnClause?.type.trimmedDescription
-            let body = returnType == nil || returnType == "Void" || returnType == "()"
-                ? "\(call); return .undefined"
-                : "return \(call).jsValue"
-            return "\"\(method.name.text)\": { object, arguments in \(body) },"
+            "\"\(method.name.text)\": { object, arguments in \(rpcCallBody(method, receiver: "object.")) },"
         }
 
         let exportName = rpcMethods.isEmpty
@@ -91,8 +76,13 @@ public struct DurableObjectMacro: PeerMacro, ExtensionMacro {
     }
 }
 
-/// `@RPC` marks a Durable Object method as callable through
-/// `DurableObjectStub.call`; `@DurableObject` collects the marked methods.
+/// `@RPC` marks a method callable by other workers:
+///
+/// - on a method of a `@DurableObject` class, through `DurableObjectStub.call`
+///   (`@DurableObject` collects these methods);
+/// - on a top-level function, through a service binding's `Fetcher.call`. It
+///   then generates a `workers_rpc:<name>` export, and `worker-build` adds the
+///   method to the worker's default `WorkerEntrypoint` class.
 public struct RPCMacro: PeerMacro {
     public static func expansion(
         of node: AttributeSyntax,
@@ -105,8 +95,58 @@ public struct RPCMacro: PeerMacro {
         if function.modifiers.contains(where: { $0.name.tokenKind == .keyword(.static) || $0.name.tokenKind == .keyword(.class) }) {
             throw MacroExpansionErrorMessage("@RPC methods must be instance methods")
         }
-        return []
+        guard context.lexicalContext.isEmpty else {
+            // A Durable Object method: @DurableObject registers it.
+            return []
+        }
+
+        let name = function.name.text
+        guard isJavaScriptIdentifier(name) else {
+            throw MacroExpansionErrorMessage(
+                "@RPC function name \(name) must also be a JavaScript method name (ASCII letters, digits, _ and $)"
+            )
+        }
+        // The generated WorkerEntrypoint class defines these itself.
+        guard !["constructor", "fetch", "env", "ctx"].contains(name) else {
+            throw MacroExpansionErrorMessage("@RPC function \(name) clashes with the WorkerEntrypoint class's own \(name)")
+        }
+
+        return [
+            """
+            #if arch(wasm32)
+            @_expose(wasm, "workers_rpc:\(raw: name)")
+            #endif
+            @_cdecl("__workersSwift_rpc_\(raw: name)")
+            public func __workersSwift_rpc_\(raw: name)() {
+                WorkersRuntime.registerRPC(name: "\(raw: name)") { arguments in
+                    \(raw: rpcCallBody(function, receiver: ""))
+                }
+            }
+            """,
+        ]
     }
+}
+
+/// The body of a closure `{ arguments in … }` that calls `method` on
+/// `receiver` (for example `"object."`, or `""` for a free function) with
+/// the JavaScript `arguments` converted to its parameter types, and returns
+/// its result as a `JSValue`.
+func rpcCallBody(_ method: FunctionDeclSyntax, receiver: String) -> String {
+    let arguments = method.signature.parameterClause.parameters.enumerated().map { index, parameter in
+        let value = "WorkersRuntime.rpcArgument(arguments, \(index), as: \(parameter.type.trimmedDescription).self)"
+        return parameter.firstName.tokenKind == .wildcard ? value : "\(parameter.firstName.text): \(value)"
+    }
+    let effects = method.signature.effectSpecifiers
+    // Converting arguments can throw, so a call with arguments needs `try`
+    // even when the method does not throw.
+    let needsTry = effects?.throwsClause != nil || !arguments.isEmpty
+    let call = (needsTry ? "try " : "")
+        + (effects?.asyncSpecifier != nil ? "await " : "")
+        + "\(receiver)\(method.name.text)(\(arguments.joined(separator: ", ")))"
+    let returnType = method.signature.returnClause?.type.trimmedDescription
+    return returnType == nil || returnType == "Void" || returnType == "()"
+        ? "\(call); return .undefined"
+        : "return \(call).jsValue"
 }
 
 private func isRPCAttribute(_ element: AttributeListSyntax.Element) -> Bool {

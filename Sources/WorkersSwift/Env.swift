@@ -24,4 +24,9 @@ public final class Env: @unchecked Sendable {
     public func durableObject(_ name: String) -> DurableObjectNamespace {
         DurableObjectNamespace(jsObject[name].object!)
     }
+
+    /// A service binding, such as `services` in wrangler.jsonc.
+    public func service(_ name: String) -> Fetcher {
+        Fetcher(jsObject[name].object!)
+    }
 }

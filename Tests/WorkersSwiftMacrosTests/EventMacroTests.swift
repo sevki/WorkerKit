@@ -260,4 +260,47 @@ final class EventMacroTests: XCTestCase {
             macros: macros
         )
     }
+
+    func testTopLevelRPCRegistersEntrypointMethod() {
+        assertMacroExpansion(
+            """
+            @RPC func add(_ a: Int, _ b: Int) -> Int {
+                a + b
+            }
+            """,
+            expandedSource: """
+            func add(_ a: Int, _ b: Int) -> Int {
+                a + b
+            }
+
+            #if arch(wasm32)
+            @_expose(wasm, "workers_rpc:add")
+            #endif
+            @_cdecl("__workersSwift_rpc_add")
+            public func __workersSwift_rpc_add() {
+                WorkersRuntime.registerRPC(name: "add") { arguments in
+                    return try add(WorkersRuntime.rpcArgument(arguments, 0, as: Int.self), WorkersRuntime.rpcArgument(arguments, 1, as: Int.self)).jsValue
+                }
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    func testTopLevelRPCRejectsEntrypointNames() {
+        assertMacroExpansion(
+            """
+            @RPC func fetch() {
+            }
+            """,
+            expandedSource: """
+            func fetch() {
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(message: "@RPC function fetch clashes with the WorkerEntrypoint class's own fetch", line: 1, column: 1),
+            ],
+            macros: macros
+        )
+    }
 }

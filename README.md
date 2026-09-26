@@ -34,7 +34,7 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
 - A status outside 200–599 or a header that the Fetch `Headers` class would reject becomes a `500` rather than a JavaScript exception, and 204, 205 and 304 are sent without a body.
 - An error thrown by the handler is logged with `console.error` and becomes `500 Internal Server Error`.
 
-`Env` reads plain-text bindings (`env.variable("NAME")`, `env.secret("NAME")`) and Durable Object namespaces (`env.durableObject("NAME")`), and `Context` exposes `waitUntil` and `passThroughOnException`. Other typed bindings such as KV, R2 and D1 are not wrapped yet.
+`Env` reads plain-text bindings (`env.variable("NAME")`, `env.secret("NAME")`), Durable Object namespaces (`env.durableObject("NAME")`) and service bindings (`env.service("NAME")`), and `Context` exposes `waitUntil` and `passThroughOnException`. Other typed bindings such as KV, R2 and D1 are not wrapped yet.
 
 ## Durable Objects and RPC
 
@@ -72,7 +72,20 @@ let response = try await counter.fetch("https://counter/")
 - `DurableObjectState.storage` offers `get(_:as:)`, `put(_:_:)` and `delete(_:)`, and `jsObject` for the rest of the storage API.
 - Bind the class as usual, for example in wrangler.jsonc: `"durable_objects": { "bindings": [{ "name": "COUNTER", "class_name": "Counter" }] }` with a migration that adds `Counter`.
 
-RPC on the default entrypoint (`WorkerEntrypoint`, for service bindings) is not supported yet.
+## RPC over service bindings
+
+`@RPC` on a top-level function makes it a method of the worker's default entrypoint, which other workers (or the worker itself) call through a service binding:
+
+```swift
+@RPC func add(_ a: Int, _ b: Int) -> Int {
+    a + b
+}
+
+// In another worker, with "services": [{ "binding": "MATH", "service": "my-swift-worker" }]:
+let sum = try await env.service("MATH").call("add", 2, 3, as: Int.self)
+```
+
+When a worker has top-level `@RPC` functions, `worker-build` makes its default export a `WorkerEntrypoint` class (from `cloudflare:workers`) with `fetch` and one method per function; otherwise the default export is a plain `{ fetch }` object. A service binding's `Fetcher` also forwards requests with `fetch(_:)`.
 
 ## Repository layout
 

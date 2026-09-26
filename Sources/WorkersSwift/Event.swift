@@ -29,8 +29,13 @@ public macro Event(_ event: WorkerEvent) = #externalMacro(module: "WorkersSwiftM
 @attached(extension, conformances: DurableObject)
 public macro DurableObject() = #externalMacro(module: "WorkersSwiftMacros", type: "DurableObjectMacro")
 
-/// Makes a Durable Object method callable through `DurableObjectStub.call`.
+/// Makes a function callable by other workers over RPC:
+///
+/// - a method of a `@DurableObject` class, through `DurableObjectStub.call`;
+/// - a top-level function, as a method of the worker's default entrypoint,
+///   through a service binding's `Fetcher.call`.
+///
 /// Arguments and results convert through JavaScriptKit's
 /// `ConstructibleFromJSValue` and `ConvertibleToJSValue`.
-@attached(peer)
+@attached(peer, names: prefixed(__workersSwift_rpc_))
 public macro RPC() = #externalMacro(module: "WorkersSwiftMacros", type: "RPCMacro")

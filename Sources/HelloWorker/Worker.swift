@@ -54,6 +54,12 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         _ = bytes.withUnsafeBufferPointer { write(1, $0.baseAddress, $0.count) }
         return .ok("logged")
 
+    case ("GET", "/rpc/add"):
+        // Service binding RPC: calls this worker's own @RPC add(_:_:) through
+        // the SELF binding.
+        let sum = try await env.service("SELF").call("add", 2, 3, as: Int.self)
+        return .ok(String(sum))
+
     case ("GET", "/counter/increment"):
         // Durable Object RPC: calls Counter.increment(by:) on the object named
         // "e2e".
@@ -75,6 +81,12 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
     default:
         return .error("Not Found", 404)
     }
+}
+
+/// Callable by other workers through a service binding, as a method of this
+/// worker's default entrypoint.
+@RPC func add(_ a: Int, _ b: Int) -> Int {
+    a + b
 }
 
 /// A Durable Object that counts in its storage.

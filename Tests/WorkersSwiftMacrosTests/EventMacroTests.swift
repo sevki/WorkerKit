@@ -176,6 +176,7 @@ final class EventMacroTests: XCTestCase {
                 func increment(by amount: Int) async throws -> Int {
                     amount
                 }
+
                 func reset() {
                 }
 
@@ -189,14 +190,14 @@ final class EventMacroTests: XCTestCase {
             @_cdecl("__workersSwift_do_Counter")
             public func __workersSwift_do_Counter() {
                 WorkersRuntime.registerDurableObject(Counter.self, name: "Counter", rpc: [
-                        "increment": { object, arguments in
-                            return try await object.increment(by: WorkersRuntime.rpcArgument(arguments, 0, as: Int.self)).jsValue
-                        },
-                        "reset": { object, arguments in
-                            object.reset();
-                            return .undefined
-                        },
-                    ])
+                    "increment": { object, arguments in
+                                    return try await object.increment(by: WorkersRuntime.rpcArgument(arguments, 0, as: Int.self)).jsValue
+                                },
+                    "reset": { object, arguments in
+                                    object.reset();
+                                    return .undefined
+                                },
+                ])
             }
             """,
             macros: macros

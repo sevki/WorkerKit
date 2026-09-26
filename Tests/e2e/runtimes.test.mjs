@@ -81,8 +81,10 @@ for (const runtime of runtimes) {
       assert.equal(body, "Not Found");
     });
 
-    // Only workerd is known to print worker console output to its own stdout.
-    test("fd_write decodes iovecs as one UTF-8 stream", { skip: runtime !== "workerd" }, async () => {
+    // The split-UTF-8 write comes from fixture.wat, and only workerd is known
+    // to print worker console output to its own stdout.
+    const fixtureOnWorkerd = !process.env.WORKERS_SWIFT_WASM && runtime === "workerd";
+    test("fd_write decodes iovecs as one UTF-8 stream", { skip: !fixtureOnWorkerd }, async () => {
       await request("/health");
       const deadline = Date.now() + 5_000;
       while (!output.join("").includes("split:") && Date.now() < deadline) {

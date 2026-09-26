@@ -211,7 +211,24 @@ async function __workersSwiftFetch(request, env, ctx) {
   if (typeof handler !== "function") {
     throw new Error("The Swift worker has no @Event(.fetch) function");
   }
-  return flushingConsole(() => handler(request, env, ctx));
+  return flushingConsole(() => handler(request, env, trackingWaitUntil(ctx)));
+}
+
+// Work passed to ctx.waitUntil outlives the handler and may still write to
+// stdout/stderr, so it counts as a call in flight until it settles.
+function trackingWaitUntil(ctx) {
+  if (!ctx) {
+    return ctx;
+  }
+  return new Proxy(ctx, {
+    get(target, property) {
+      if (property === "waitUntil") {
+        return (promise) => target.waitUntil(flushingConsole(() => promise));
+      }
+      const value = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 // Calls the top-level `@RPC` function `name`.

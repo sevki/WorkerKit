@@ -149,8 +149,13 @@ func rpcCallBody(_ method: FunctionDeclSyntax, receiver: String) -> String {
         : "return \(call).jsValue"
 }
 
+/// Whether `element` is `@RPC`, including the qualified `@WorkersSwift.RPC`.
 private func isRPCAttribute(_ element: AttributeListSyntax.Element) -> Bool {
-    element.as(AttributeSyntax.self)?.attributeName.trimmedDescription == "RPC"
+    guard let name = element.as(AttributeSyntax.self)?.attributeName else {
+        return false
+    }
+    let lastComponent = name.as(MemberTypeSyntax.self)?.name.text ?? name.as(IdentifierTypeSyntax.self)?.name.text
+    return lastComponent == "RPC"
 }
 
 /// Whether `name` is an ASCII JavaScript identifier, as `worker-build` needs

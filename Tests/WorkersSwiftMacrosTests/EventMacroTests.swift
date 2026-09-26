@@ -303,4 +303,36 @@ final class EventMacroTests: XCTestCase {
             macros: macros
         )
     }
+
+    func testDurableObjectCollectsQualifiedRPCAttributes() {
+        assertMacroExpansion(
+            """
+            @DurableObject
+            final class Room {
+                @WorkersSwift.RPC func ping() {
+                }
+            }
+            """,
+            expandedSource: """
+            final class Room {
+                @WorkersSwift.RPC func ping() {
+                }
+            }
+
+            #if arch(wasm32)
+            @_expose(wasm, "workers_do:Room:ping")
+            #endif
+            @_cdecl("__workersSwift_do_Room")
+            public func __workersSwift_do_Room() {
+                WorkersRuntime.registerDurableObject(Room.self, name: "Room", rpc: [
+                    "ping": { object, arguments in
+                                    object.ping();
+                                    return .undefined
+                                },
+                ])
+            }
+            """,
+            macros: macros
+        )
+    }
 }

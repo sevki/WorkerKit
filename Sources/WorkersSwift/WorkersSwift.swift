@@ -1,4 +1,6 @@
-import Foundation
+#if canImport(Synchronization)
+import Synchronization
+#endif
 
 public struct WorkerRequest: Sendable, Equatable {
     public let method: String
@@ -35,20 +37,49 @@ public enum WorkersSwiftApp {
     }
 }
 
-private struct StoredWasmResponse {
+private struct StoredWasmResponse: Sendable {
     let status: Int32
     let body: [UInt8]
 }
 
-private struct WasmAllocation {
+private struct WasmAllocation: Sendable {
     let size: Int32
     let alignment: Int32
 }
 
+/// Guards the ABI's global state. Native `swift test` runs tests in parallel,
+/// so it needs a real lock; a Wasm module in workerd/celld is single-threaded.
+private final class ABIState<Value: Sendable>: @unchecked Sendable {
+    #if canImport(Synchronization)
+    private let mutex: Mutex<Value>
+
+    init(_ value: Value) {
+        mutex = Mutex(value)
+    }
+
+    func withLock<Result: Sendable>(_ body: (inout Value) -> Result) -> Result {
+        mutex.withLock { value in body(&value) }
+    }
+    #else
+    private var value: Value
+
+    init(_ value: Value) {
+        self.value = value
+    }
+
+    func withLock<Result: Sendable>(_ body: (inout Value) -> Result) -> Result {
+        body(&value)
+    }
+    #endif
+}
+
 enum WasmResponseStore {
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var nextHandle: Int32 = 1
-    nonisolated(unsafe) private static var responses: [Int32: StoredWasmResponse] = [:]
+    private struct State: Sendable {
+        var nextHandle: Int32 = 1
+        var responses: [Int32: StoredWasmResponse] = [:]
+    }
+
+    private static let state = ABIState(State())
 
     static func nextValidHandle(after handle: Int32) -> Int32 {
         let next = handle &+ 1
@@ -76,26 +107,20 @@ enum WasmResponseStore {
             )
         }
 
-        lock.lock()
-        defer { lock.unlock() }
-
-        let handle = nextHandle > 0 ? nextHandle : 1
-        nextHandle = nextValidHandle(after: handle)
-        responses[handle] = storedResponse
-        return handle
+        return state.withLock { state in
+            let handle = state.nextHandle > 0 ? state.nextHandle : 1
+            state.nextHandle = nextValidHandle(after: handle)
+            state.responses[handle] = storedResponse
+            return handle
+        }
     }
 
     static func status(for handle: Int32) -> Int32 {
-        lock.lock()
-        defer { lock.unlock() }
-        return responses[handle]?.status ?? 500
+        state.withLock { $0.responses[handle]?.status ?? 500 }
     }
 
     static func bodyLength(for handle: Int32) -> Int32 {
-        lock.lock()
-        defer { lock.unlock() }
-
-        let count = responses[handle]?.body.count ?? 0
+        let count = state.withLock { $0.responses[handle]?.body.count ?? 0 }
         return Int32(exactly: count) ?? Int32.max
     }
 
@@ -104,9 +129,7 @@ enum WasmResponseStore {
             return
         }
 
-        lock.lock()
-        let body = Array(responses[handle]?.body ?? [])
-        lock.unlock()
+        let body = state.withLock { $0.responses[handle]?.body ?? [] }
 
         guard !body.isEmpty else {
             return
@@ -118,36 +141,30 @@ enum WasmResponseStore {
     }
 
     static func release(_ handle: Int32) {
-        lock.lock()
-        defer { lock.unlock() }
-        responses.removeValue(forKey: handle)
+        state.withLock { _ = $0.responses.removeValue(forKey: handle) }
     }
 }
 
 enum WasmAllocationStore {
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var allocations: [UInt: WasmAllocation] = [:]
+    private static let allocations = ABIState([UInt: WasmAllocation]())
 
     static func record(pointer: UnsafeMutableRawPointer, size: Int32, alignment: Int32) {
-        lock.lock()
-        defer { lock.unlock() }
-        allocations[UInt(bitPattern: pointer)] = WasmAllocation(size: size, alignment: alignment)
+        allocations.withLock { $0[UInt(bitPattern: pointer)] = WasmAllocation(size: size, alignment: alignment) }
     }
 
     static func take(pointer: UnsafeMutableRawPointer, size: Int32, alignment: Int32) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
+        allocations.withLock { allocations in
+            let key = UInt(bitPattern: pointer)
+            guard let allocation = allocations[key] else {
+                return false
+            }
+            guard allocation.size == size, allocation.alignment == alignment else {
+                return false
+            }
 
-        let key = UInt(bitPattern: pointer)
-        guard let allocation = allocations[key] else {
-            return false
+            allocations.removeValue(forKey: key)
+            return true
         }
-        guard allocation.size == size, allocation.alignment == alignment else {
-            return false
-        }
-
-        allocations.removeValue(forKey: key)
-        return true
     }
 }
 
@@ -161,7 +178,7 @@ func decodeUTF8(_ pointer: UnsafePointer<UInt8>?, _ length: Int32) -> String? {
     }
 
     let buffer = UnsafeBufferPointer(start: pointer, count: Int(length))
-    return String(bytes: buffer, encoding: .utf8)
+    return String(validating: buffer, as: UTF8.self)
 }
 
 #if arch(wasm32)

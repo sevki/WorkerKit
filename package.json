@@ -1,0 +1,12 @@
+{
+  "name": "workers-swift-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:e2e": "node --test --test-concurrency=1 Tests/e2e/*.test.mjs"
+  },
+  "devDependencies": {
+    "wabt": "1.0.39",
+    "workerd": "1.20260926.1"
+  }
+}

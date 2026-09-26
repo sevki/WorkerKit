@@ -49,7 +49,7 @@ struct WorkerBuild: CommandPlugin {
 
         // A separate scratch path keeps the nested build off the lock that
         // `swift package` holds on the package's own .build directory.
-        var buildArguments = [
+        let buildArguments = [
             "build",
             "--package-path", packageDirectory.path(),
             "--scratch-path", context.pluginWorkDirectoryURL.appending(path: "wasm").path(),
@@ -58,17 +58,16 @@ struct WorkerBuild: CommandPlugin {
             "--product", product,
             "-Xswiftc", "-Xclang-linker", "-Xswiftc", "-mexec-model=reactor",
         ]
+
+        // Package.swift links Embedded Swift's Unicode tables when this is set.
+        var environment = ProcessInfo.processInfo.environment
         if sdk.hasSuffix("-embedded") {
-            // Embedded Swift keeps String's Unicode tables (comparison,
-            // hashing, case mapping) in a library that must be linked
-            // explicitly. Unlike -Xlinker, -Xswiftc flags reach only the Wasm
-            // targets, not host tools such as the @Event macro plugin.
-            buildArguments += ["-Xswiftc", "-Xclang-linker", "-Xswiftc", "-lswiftUnicodeDataTables"]
+            environment["WORKERS_SWIFT_EMBEDDED"] = "1"
         }
 
         print("worker-build: building \(product) with Swift SDK \(sdk) (\(configuration))")
-        try run(swift, buildArguments)
-        let binPath = try run(swift, buildArguments + ["--show-bin-path"], captureOutput: true)
+        try run(swift, buildArguments, environment: environment)
+        let binPath = try run(swift, buildArguments + ["--show-bin-path"], environment: environment, captureOutput: true)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let wasm = URL(fileURLWithPath: binPath).appending(path: "\(product).wasm")
 
@@ -136,9 +135,17 @@ struct WorkerBuild: CommandPlugin {
     }
 
     @discardableResult
-    private func run(_ executable: URL, _ arguments: [String], captureOutput: Bool = false) throws -> String {
+    private func run(
+        _ executable: URL,
+        _ arguments: [String],
+        environment: [String: String]? = nil,
+        captureOutput: Bool = false
+    ) throws -> String {
         let process = Process()
         process.executableURL = executable
+        if let environment {
+            process.environment = environment
+        }
         process.arguments = executable.lastPathComponent == "env" ? ["swift"] + arguments : arguments
         let pipe = Pipe()
         if captureOutput {

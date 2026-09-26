@@ -4,6 +4,15 @@
 import CompilerPluginSupport
 import PackageDescription
 
+// Embedded Swift keeps String's Unicode tables (comparison, hashing, case
+// mapping) in a separate library. `swift package worker-build` sets
+// WORKERS_SWIFT_EMBEDDED when it builds with a `*-embedded` Swift SDK; the
+// WASI condition keeps the library away from host tools such as the macro.
+let embeddedWasmLinkerSettings: [LinkerSetting] =
+    Context.environment["WORKERS_SWIFT_EMBEDDED"] == nil
+        ? []
+        : [.linkedLibrary("swiftUnicodeDataTables", .when(platforms: [.wasi]))]
+
 let package = Package(
     name: "WorkersSwift",
     // `Synchronization.Mutex` guards the ABI state in native test runs.
@@ -39,7 +48,8 @@ let package = Package(
         ),
         .target(
             name: "WorkersSwift",
-            dependencies: ["WorkersSwiftMacros"]
+            dependencies: ["WorkersSwiftMacros"],
+            linkerSettings: embeddedWasmLinkerSettings
         ),
         // The example worker. It is a library so tests can import it;
         // WorkersSwiftWasm links it into WorkersSwift.wasm.

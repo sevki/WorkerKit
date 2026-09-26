@@ -38,6 +38,9 @@
     (i32.store (i32.const 4) (i32.const 20))
     (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))
     (drop (call $random_get (i32.const 12) (i32.const 4)))
+    ;; More than getRandomValues' 65,536-byte quota: the shim must chunk it.
+    (if (call $random_get (i32.const 20000) (i32.const 70000))
+      (then (unreachable)))
     (global.set $ready (i32.const 1)))
 
   (func (export "workers_alloc") (param $size i32) (param $alignment i32) (result i32)

@@ -25,7 +25,11 @@ function buildImportObject(module, swift, getMemory) {
       return 0;
     },
     random_get(pointer, length) {
-      crypto.getRandomValues(new Uint8Array(getMemory().buffer, pointer, length));
+      // getRandomValues fills at most 65,536 bytes per call; WASI allows more.
+      for (let offset = 0; offset < length; offset += 65_536) {
+        const chunk = Math.min(65_536, length - offset);
+        crypto.getRandomValues(new Uint8Array(getMemory().buffer, pointer + offset, chunk));
+      }
       return 0;
     },
     fd_write(fd, iovs, iovsLength, writtenPointer) {

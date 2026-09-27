@@ -19,7 +19,7 @@ public final class JSValueEncoder {
         if let big = _bigIntJSValue(for: value) {
             return big
         }
-        if let convertible = value as? ConvertibleToJSValue {
+        if _takesConvertibleShortcut(value), let convertible = value as? ConvertibleToJSValue {
             return convertible.jsValue
         }
         let encoder = _Encoder(userInfo: [:])
@@ -37,6 +37,22 @@ private func _bigIntJSValue(for value: some Encodable) -> JSValue? {
     case let v as UInt64: return JSBigInt(unsigned: v).jsValue
     default: return nil
     }
+}
+
+/// `Array`, `Dictionary`, and `Optional` all have their own conditional
+/// `ConvertibleToJSValue` conformance (forwarding to each element's/each
+/// wrapped value's own `.jsValue`), which would bypass `_bigIntJSValue`
+/// entirely for, say, `[Int64]` or `Int64?` — converting their elements
+/// through JavaScriptKit's default `Double`-backed path instead. Excluding
+/// them from the shortcut sends them through this encoder's own container
+/// machinery, which checks `_bigIntJSValue` at every element/wrapped value.
+private protocol _JSValueEncoderRecursesInto {}
+extension Array: _JSValueEncoderRecursesInto {}
+extension Dictionary: _JSValueEncoderRecursesInto {}
+extension Optional: _JSValueEncoderRecursesInto {}
+
+private func _takesConvertibleShortcut(_ value: some Encodable) -> Bool {
+    !(value is _JSValueEncoderRecursesInto)
 }
 
 /// `_EncodingStorage.value`'s setter also runs `onSet`, so a nested encoder
@@ -110,7 +126,7 @@ private struct _KeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContainerPr
     mutating func encode<T>(_ value: T, forKey key: Key) throws where T: Encodable {
         if let big = _bigIntJSValue(for: value) {
             _encode(big, forKey: key)
-        } else if let convertible = value as? ConvertibleToJSValue {
+        } else if _takesConvertibleShortcut(value), let convertible = value as? ConvertibleToJSValue {
             _encode(convertible.jsValue, forKey: key)
         } else {
             let nested = encoder.nestedEncoder(with: key) { [object] value in object[key.stringValue] = value }
@@ -170,7 +186,7 @@ private struct _UnkeyedEncodingContainer: UnkeyedEncodingContainer {
     mutating func encode<T>(_ value: T) throws where T: Encodable {
         if let big = _bigIntJSValue(for: value) {
             _append(big)
-        } else if let convertible = value as? ConvertibleToJSValue {
+        } else if _takesConvertibleShortcut(value), let convertible = value as? ConvertibleToJSValue {
             _append(convertible.jsValue)
         } else {
             let index = _reserveNext()
@@ -207,7 +223,7 @@ extension _Encoder: SingleValueEncodingContainer {
     func encode<T>(_ value: T) throws where T: Encodable {
         if let big = _bigIntJSValue(for: value) {
             storage.value = big
-        } else if let convertible = value as? ConvertibleToJSValue {
+        } else if _takesConvertibleShortcut(value), let convertible = value as? ConvertibleToJSValue {
             storage.value = convertible.jsValue
         } else {
             try value.encode(to: self)

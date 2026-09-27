@@ -185,6 +185,13 @@ for (const runtime of runtimes) {
       assert.equal(result.body, "match");
     });
 
+    test("distributed actor over Workers RPC: [Int64] stays lossless too, not just a scalar Int64", async () => {
+      const result = await request("/distributed/bignumbers");
+      assertNotCrashed(result, "/distributed/bignumbers");
+      assert.equal(result.response.status, 200);
+      assert.equal(result.body, "match");
+    });
+
     test("distributed actor over Workers RPC: superEncoder()/superEncoder(forKey:) keep base-class fields", async () => {
       const result = await request("/distributed/dog");
       assertNotCrashed(result, "/distributed/dog");

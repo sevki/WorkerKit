@@ -152,6 +152,16 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         let result = try await doubler.bigNumber(n)
         return .ok(result == n ? "match" : "mismatch: \(result) != \(n)")
 
+    case ("GET", "/distributed/bignumbers"):
+        // Same as /distributed/bignumber, but nested in a [Int64]: the
+        // regression case Codex flagged, where Array's own
+        // ConvertibleToJSValue conformance could bypass the Int64 fix.
+        let callerSystem = WorkersActorSystem(stub: env.service("SELF"))
+        let doubler = try Doubler.resolve(id: "doubler", using: callerSystem)
+        let values: [Int64] = [1, 9_007_199_254_740_993, -9_007_199_254_740_993]
+        let result = try await doubler.bigNumbers(values)
+        return .ok(result == values ? "match" : "mismatch: \(result) != \(values)")
+
     case ("GET", "/distributed/dog"):
         // Exercises JSValueEncoder's superEncoder()/superEncoder(forKey:)
         // through a two-level Codable class hierarchy.
@@ -200,6 +210,16 @@ distributed actor Doubler {
     /// JavaScriptKit's default Double-backed JS number conversion.
     distributed func bigNumber(_ n: Int64) -> Int64 {
         n
+    }
+
+    /// Exercises the same lossless-Int64 path, but nested inside a
+    /// collection: `[Int64]` (and `Dictionary`/`Optional`) each have their
+    /// own `ConvertibleToJSValue` conformance that forwards to each
+    /// element's default (Double-backed) conversion, bypassing
+    /// JSValueEncoder's Int64 special case unless it explicitly excludes
+    /// collections from that shortcut.
+    distributed func bigNumbers(_ values: [Int64]) -> [Int64] {
+        values
     }
 
     /// Exercises JSValueEncoder's superEncoder()/superEncoder(forKey:): Dog

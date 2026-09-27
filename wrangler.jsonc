@@ -1,0 +1,38 @@
+// Deploys the example worker (Sources/HelloWorker) built by
+// `swift package worker-build` to Cloudflare Workers — which runs on
+// workerd itself, the same runtime this repository's e2e suite already
+// verifies the build against (see Tests/e2e).
+//
+// `no_bundle: true` uploads `build/worker/worker.mjs` and
+// `build/worker/WorkersSwift.wasm` as-is, rather than letting wrangler's
+// own esbuild bundler reprocess them: this is the exact artifact already
+// tested against real workerd, unchanged.
+//
+// One binding needs a value only Cloudflare can hand out and isn't
+// filled in here yet: `kv_namespaces[0].id`, from a real KV namespace.
+// Until that's created (`wrangler kv namespace create workers-swift-example-KV`)
+// and its id filled in below, the KV binding is omitted — /kv, /kv/<key>
+// and /kv-bytes will 500, everything else (/, /dining/*, /distributed/*,
+// /counter/*, /rpc/add) works.
+{
+	"name": "workers-swift-example",
+	"main": "build/worker/worker.mjs",
+	"no_bundle": true,
+	"compatibility_date": "2026-01-01",
+	"vars": {
+		"GREETING": "hello from a real Cloudflare Workers deployment"
+	},
+	"durable_objects": {
+		"bindings": [
+			{ "name": "COUNTER", "class_name": "Counter" },
+			{ "name": "FORKS", "class_name": "ForkObject" },
+			{ "name": "PHILOSOPHERS", "class_name": "PhilosopherObject" }
+		]
+	},
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["Counter", "ForkObject", "PhilosopherObject"] }
+	],
+	"services": [
+		{ "binding": "SELF", "service": "workers-swift-example" }
+	]
+}

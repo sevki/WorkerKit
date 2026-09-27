@@ -46,6 +46,7 @@ let package = Package(
                 "WorkersSwiftMacros",
                 .product(name: "JavaScriptKit", package: "JavaScriptKit"),
                 .product(name: "JavaScriptEventLoop", package: "JavaScriptKit"),
+                .product(name: "JavaScriptBigIntSupport", package: "JavaScriptKit"),
             ]
         ),
         // The example worker; WorkersSwiftWasm links it into WorkersSwift.wasm.

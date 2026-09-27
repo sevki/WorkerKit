@@ -98,8 +98,24 @@ public final class DurableObjectNamespace: @unchecked Sendable {
 
     /// The stub for the object named `name`.
     public func get(named name: String) -> DurableObjectStub {
-        let id = jsObject.idFromName!(name)
-        return DurableObjectStub(jsObject.get!(id).object!)
+        DurableObjectStub(jsObject.get!(jsObject.idFromName!(name)).object!)
+    }
+
+    /// The id `name` deterministically maps to in this namespace, as a hex
+    /// string — what `get(named:)` computes internally, exposed so it can
+    /// be used as a portable id (see `WorkersActorSystem`'s per-Durable-
+    /// Object-id routing, which needs the same id on both the caller's and
+    /// the hosting object's side: the object's own `DurableObjectState.id`
+    /// is already this same hex form, not the friendly name).
+    public func idFromName(_ name: String) -> String {
+        jsObject.idFromName!(name).toString().string ?? name
+    }
+
+    /// The stub for the object with hex id `id` (from `idFromName(_:)` or
+    /// a Durable Object's own `DurableObjectState.id`) — unlike
+    /// `get(named:)`, `id` is used as-is, not re-hashed as a name.
+    public func get(id: String) -> DurableObjectStub {
+        DurableObjectStub(jsObject.get!(jsObject.idFromString!(id)).object!)
     }
 }
 

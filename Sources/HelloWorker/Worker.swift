@@ -1,3 +1,4 @@
+import Distributed
 import JavaScriptKit
 import WorkersSwift
 
@@ -117,6 +118,105 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         try await kv.put("bytes", try await req.bytes())
         return Response(status: 200, headers: [], body: try await kv.bytes("bytes") ?? [])
 
+    case (let method, let path) where path.hasPrefix("/distributed/double/"):
+        guard method == "GET" else {
+            return .error("Method Not Allowed", 405)
+        }
+        // distributed actor over Workers RPC: calls this worker's own
+        // Doubler through the SELF binding, via WorkersActorSystem. The
+        // caller never sees a plain RPC method name — the compiler-
+        // generated distributed thunk and executeDistributedTarget resolve
+        // the call end to end. See rfcs/distributed-actor-rpc.md.
+        let n = Int(path.dropFirst("/distributed/double/".count)) ?? 0
+        let callerSystem = WorkersActorSystem(stub: env.service("SELF"))
+        let doubler = try Doubler.resolve(id: "doubler", using: callerSystem)
+        let doubled = try await doubler.double(n)
+        return .ok(String(doubled))
+
+    case ("POST", "/distributed/echo"):
+        // The same call path as /distributed/double/, but through a generic
+        // distributed func: exercises recordGenericSubstitution /
+        // decodeGenericSubstitutions, not just plain arguments.
+        let callerSystem = WorkersActorSystem(stub: env.service("SELF"))
+        let doubler = try Doubler.resolve(id: "doubler", using: callerSystem)
+        let echoed = try await doubler.echo(try await req.text())
+        return .ok(echoed)
+
+    case ("GET", "/distributed/bignumber"):
+        // 2^53 + 1: not exactly representable as a Double, so this proves
+        // JSValueEncoder/JSValueDecoder round-trip Int64 through a JS
+        // BigInt rather than JavaScriptKit's default Double-backed number.
+        let callerSystem = WorkersActorSystem(stub: env.service("SELF"))
+        let doubler = try Doubler.resolve(id: "doubler", using: callerSystem)
+        let n: Int64 = 9_007_199_254_740_993
+        let result = try await doubler.bigNumber(n)
+        return .ok(result == n ? "match" : "mismatch: \(result) != \(n)")
+
+    case ("GET", "/distributed/bignumbers"):
+        // Same as /distributed/bignumber, but nested in a [Int64]: the
+        // regression case Codex flagged, where Array's own
+        // ConvertibleToJSValue conformance could bypass the Int64 fix.
+        let callerSystem = WorkersActorSystem(stub: env.service("SELF"))
+        let doubler = try Doubler.resolve(id: "doubler", using: callerSystem)
+        let values: [Int64] = [1, 9_007_199_254_740_993, -9_007_199_254_740_993]
+        let result = try await doubler.bigNumbers(values)
+        return .ok(result == values ? "match" : "mismatch: \(result) != \(values)")
+
+    case ("GET", "/distributed/dog"):
+        // Exercises JSValueEncoder's superEncoder()/superEncoder(forKey:)
+        // through a two-level Codable class hierarchy.
+        let callerSystem = WorkersActorSystem(stub: env.service("SELF"))
+        let doubler = try Doubler.resolve(id: "doubler", using: callerSystem)
+        let result = try await doubler.identify(Dog(name: "Rex", breed: "Labrador"))
+        return .ok(result)
+
+    case ("GET", "/dining/round"):
+        // One round of the dining philosophers, run concurrently: five
+        // distributed actor instances (Philosopher, one per Durable Object
+        // id) each try to eat by making distributed calls of their own to
+        // two of five Fork instances. Adjacent philosophers share a fork,
+        // so concurrent rounds genuinely contend for them — this is real
+        // concurrent distributed-actor traffic against real Durable
+        // Objects, not a simulation.
+        let table = DiningTable(env: env)
+        let philosophers = try table.philosophers()
+        let outcomes = try await withThrowingTaskGroup(of: (Int, String).self) { group in
+            for i in 0..<5 {
+                let (leftForkID, rightForkID) = table.forkIDs(for: i)
+                group.addTask {
+                    (i, try await philosophers[i].tryEat(leftForkID: leftForkID, rightForkID: rightForkID))
+                }
+            }
+            var results: [Int: String] = [:]
+            for try await (i, outcome) in group {
+                results[i] = outcome
+            }
+            return results
+        }
+        let lines = (0..<5).map { "phil-\($0): \(outcomes[$0] ?? "?")" }
+        return .ok(lines.joined(separator: "\n"))
+
+    case ("GET", "/dining/simulate"):
+        // Thirty concurrent rounds: proof the resource-ordering protocol
+        // never deadlocks and every philosopher keeps making progress
+        // (no permanent starvation) under real, repeated contention.
+        let table = DiningTable(env: env)
+        let philosophers = try table.philosophers()
+        for _ in 0..<30 {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for i in 0..<5 {
+                    let (leftForkID, rightForkID) = table.forkIDs(for: i)
+                    group.addTask { _ = try await philosophers[i].tryEat(leftForkID: leftForkID, rightForkID: rightForkID) }
+                }
+                try await group.waitForAll()
+            }
+        }
+        var totals: [Int] = []
+        for philosopher in philosophers {
+            totals.append(try await philosopher.meals())
+        }
+        return .ok(totals.map(String.init).joined(separator: ","))
+
     case ("GET", "/no-content"):
         return .empty()
 
@@ -133,6 +233,287 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
 /// worker's default entrypoint.
 @RPC func add(_ a: Int, _ b: Int) -> Int {
     a + b
+}
+
+/// A `distributed actor` reachable over Workers RPC through
+/// `WorkersActorSystem`. See `rfcs/distributed-actor-rpc.md`.
+distributed actor Doubler {
+    typealias ActorSystem = WorkersActorSystem
+
+    distributed func double(_ n: Int) -> Int {
+        n * 2
+    }
+
+    /// A generic distributed func: exercises generic-substitution transport
+    /// (recordGenericSubstitution/decodeGenericSubstitutions), not just
+    /// plain arguments.
+    distributed func echo<T: Codable & Sendable>(_ value: T) -> T {
+        value
+    }
+
+    /// Exercises the lossless Int64 wire encoding: 9007199254740993
+    /// (2^53 + 1) is not exactly representable as a Double, so this would
+    /// come back rounded if JSValueEncoder/JSValueDecoder fell through to
+    /// JavaScriptKit's default Double-backed JS number conversion.
+    distributed func bigNumber(_ n: Int64) -> Int64 {
+        n
+    }
+
+    /// Exercises the same lossless-Int64 path, but nested inside a
+    /// collection: `[Int64]` (and `Dictionary`/`Optional`) each have their
+    /// own `ConvertibleToJSValue` conformance that forwards to each
+    /// element's default (Double-backed) conversion, bypassing
+    /// JSValueEncoder's Int64 special case unless it explicitly excludes
+    /// collections from that shortcut.
+    distributed func bigNumbers(_ values: [Int64]) -> [Int64] {
+        values
+    }
+
+    /// Exercises JSValueEncoder's superEncoder()/superEncoder(forKey:): Dog
+    /// only encodes/decodes its own `breed` directly, delegating `name` to
+    /// Animal's Codable conformance through super.encode(to:)/super.init(from:).
+    distributed func identify(_ dog: Dog) -> String {
+        "\(dog.name) is a \(dog.breed)"
+    }
+}
+
+class Animal: Codable {
+    let name: String
+    private enum CodingKeys: String, CodingKey { case name }
+
+    init(name: String) {
+        self.name = name
+    }
+
+    required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+    }
+}
+
+final class Dog: Animal, @unchecked Sendable {
+    let breed: String
+    private enum CodingKeys: String, CodingKey { case breed }
+
+    init(name: String, breed: String) {
+        self.breed = breed
+        super.init(name: name)
+    }
+
+    required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        breed = try container.decode(String.self, forKey: .breed)
+        try super.init(from: container.superDecoder())
+    }
+
+    override func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(breed, forKey: .breed)
+        try super.encode(to: container.superEncoder())
+    }
+}
+
+// MARK: - Dining philosophers
+
+/// A fork: one distributed actor instance per Durable Object id, exercising
+/// `WorkersActorSystem`'s per-id routing (`init(durableObjects:)`/
+/// `host(_:as:)`) rather than the one-hosted-actor-per-worker singleton
+/// `Doubler` above uses. `tryPickUp`/`putDown` are a non-blocking try-lock:
+/// a Durable Object's own single-threaded execution makes `held`'s
+/// check-then-set atomic, with no separate locking needed.
+distributed actor Fork {
+    typealias ActorSystem = WorkersActorSystem
+
+    private var held = false
+
+    distributed func tryPickUp() -> Bool {
+        guard !held else { return false }
+        held = true
+        return true
+    }
+
+    distributed func putDown() {
+        held = false
+    }
+}
+
+@DurableObject
+final class ForkObject {
+    let hostSystem: WorkersActorSystem
+    let fork: Fork
+
+    init(state: DurableObjectState, env: Env) {
+        let hostSystem = WorkersActorSystem()
+        self.hostSystem = hostSystem
+        fork = hostSystem.host(state.id) { Fork(actorSystem: $0) }
+    }
+
+    @RPC func __workersSwiftDistributedCall(
+        _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
+    ) async throws -> JSValue {
+        try await hostSystem.receive(
+            identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
+        )
+    }
+}
+
+/// A philosopher: also one distributed actor instance per Durable Object id
+/// (see `Fork`), told which two forks to use on each call rather than
+/// knowing its own seat at construction — a Durable Object's real id (what
+/// `ForkObject`/`PhilosopherObject` assign themselves internally) is an
+/// opaque hex string, not the friendly `"fork-<n>"`/`"phil-<n>"` name a
+/// caller resolves by, so the seating plan has to travel with the call
+/// instead. Always picks up the lower-id fork first (a classic resource-
+/// ordering deadlock avoidance: two neighbors can never each hold the
+/// other's first fork), and releases immediately on a failed second
+/// pickup rather than blocking, so a failed attempt never wedges a fork.
+///
+/// A single attempt isn't enough on its own, though: measured against real
+/// workerd, five concurrent callers with no jitter resolve their pickups in
+/// a *consistent* order every round (nothing here is genuinely racing at
+/// the OS/network level the way real separate processes would), so a
+/// give-up-immediately philosopher starves permanently rather than
+/// occasionally — one philosopher won every single round, 30/30, while the
+/// other four never ate once. `tryEat` retries with random backoff between
+/// attempts specifically to break that determinism.
+distributed actor Philosopher {
+    typealias ActorSystem = WorkersActorSystem
+
+    private let forksSystem: WorkersActorSystem
+    private var mealsEaten = 0
+
+    init(actorSystem: WorkersActorSystem, forksSystem: WorkersActorSystem) {
+        self.actorSystem = actorSystem
+        self.forksSystem = forksSystem
+    }
+
+    distributed func tryEat(leftForkID: String, rightForkID: String) async throws -> String {
+        let (firstID, secondID) = leftForkID < rightForkID ? (leftForkID, rightForkID) : (rightForkID, leftForkID)
+        let first = try Fork.resolve(id: firstID, using: forksSystem)
+        let second = try Fork.resolve(id: secondID, using: forksSystem)
+
+        let maxAttempts = 6
+        for attempt in 0..<maxAttempts {
+            // Tracked outside the do block, not inferred from control flow,
+            // so a throw from *any* of these calls (a transient RPC
+            // failure, cancellation) — not just a plain `false` result —
+            // still releases whatever this attempt actually holds instead
+            // of stranding it indefinitely.
+            var firstHeld = false
+            var secondHeld = false
+            do {
+                guard try await first.tryPickUp() else {
+                    if attempt + 1 < maxAttempts {
+                        try await Task.sleep(nanoseconds: UInt64.random(in: 1_000_000...8_000_000))
+                    }
+                    continue
+                }
+                firstHeld = true
+
+                guard try await second.tryPickUp() else {
+                    try await first.putDown()
+                    firstHeld = false
+                    if attempt + 1 < maxAttempts {
+                        try await Task.sleep(nanoseconds: UInt64.random(in: 1_000_000...8_000_000))
+                    }
+                    continue
+                }
+                secondHeld = true
+
+                mealsEaten += 1
+                let meal = mealsEaten
+                try await first.putDown()
+                firstHeld = false
+                try await second.putDown()
+                secondHeld = false
+                return "ate (meal #\(meal))"
+            } catch {
+                if firstHeld { try? await first.putDown() }
+                if secondHeld { try? await second.putDown() }
+                throw error
+            }
+        }
+        return "starved this round (\(maxAttempts) attempts, forks \(firstID)/\(secondID) stayed contended)"
+    }
+
+    distributed func meals() -> Int {
+        mealsEaten
+    }
+}
+
+@DurableObject
+final class PhilosopherObject {
+    let hostSystem: WorkersActorSystem
+    let philosopher: Philosopher
+
+    init(state: DurableObjectState, env: Env) {
+        let hostSystem = WorkersActorSystem()
+        self.hostSystem = hostSystem
+        let forksSystem = WorkersActorSystem(durableObjects: env.durableObject("FORKS"))
+        philosopher = hostSystem.host(state.id) { Philosopher(actorSystem: $0, forksSystem: forksSystem) }
+    }
+
+    @RPC func __workersSwiftDistributedCall(
+        _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
+    ) async throws -> JSValue {
+        try await hostSystem.receive(
+            identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
+        )
+    }
+}
+
+/// Computes the real Durable Object hex ids for the table's five forks and
+/// philosophers up front. `WorkersActorSystem`'s per-Durable-Object-id
+/// routing needs the same canonical id the hosted object assigns itself
+/// (its own `DurableObjectState.id`) — not the friendly `"fork-<n>"`/
+/// `"phil-<n>"` name, which only `idFromName(_:)` can turn into that id.
+struct DiningTable {
+    let philosopherIDs: [String]
+    let forkHexIDs: [String]
+    let philosopherSystem: WorkersActorSystem
+
+    init(env: Env) {
+        let philosophersNamespace = env.durableObject("PHILOSOPHERS")
+        let forksNamespace = env.durableObject("FORKS")
+        philosopherIDs = (0..<5).map { philosophersNamespace.idFromName("phil-\($0)") }
+        forkHexIDs = (0..<5).map { forksNamespace.idFromName("fork-\($0)") }
+        philosopherSystem = WorkersActorSystem(durableObjects: philosophersNamespace)
+    }
+
+    func philosophers() throws -> [Philosopher] {
+        try philosopherIDs.map { try Philosopher.resolve(id: $0, using: philosopherSystem) }
+    }
+
+    func forkIDs(for index: Int) -> (left: String, right: String) {
+        (forkHexIDs[index], forkHexIDs[(index + 1) % 5])
+    }
+}
+
+/// The callee-side system this worker hosts `Doubler` on, and the one fixed
+/// RPC entry point every `WorkersActorSystem` call arrives through.
+private let distributedSystem = WorkersActorSystem()
+private let doubler: Doubler = {
+    let actor = Doubler(actorSystem: distributedSystem)
+    distributedSystem.host(actor)
+    return actor
+}()
+
+@RPC func __workersSwiftDistributedCall(
+    _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
+) async throws -> JSValue {
+    // A top-level `let` initializes lazily, on first access — and nothing
+    // else in this file touches the module-level `doubler`, so without this
+    // its initializer (which hosts it on `distributedSystem`) would never
+    // run before a call arrives here.
+    _ = doubler
+    return try await distributedSystem.receive(
+        identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
+    )
 }
 
 /// A Durable Object that counts in its storage.

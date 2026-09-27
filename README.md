@@ -121,6 +121,47 @@ let sum = try await env.service("MATH").call("add", 2, 3, as: Int.self)
 
 When a worker has top-level `@RPC` functions, `worker-build` makes its default export a `WorkerEntrypoint` class (from `cloudflare:workers`) with `fetch` and one method per function; otherwise the default export is a plain `{ fetch }` object. A service binding's `Fetcher` also forwards requests with `fetch(_:)`.
 
+## Distributed actors over Workers RPC
+
+`WorkersActorSystem` backs Swift's `distributed actor` with the same `@RPC`/`RPCStub` transport above, instead of a hand-written stub:
+
+```swift
+distributed actor Greeter {
+    typealias ActorSystem = WorkersActorSystem
+
+    distributed func hello(_ name: String) -> String {
+        "Hello, \(name)!"
+    }
+}
+
+// Callee side: host the one instance, and forward the one fixed entry point
+// every WorkersActorSystem call arrives through.
+private let greeterSystem = WorkersActorSystem()
+private let greeter: Greeter = {
+    let actor = Greeter(actorSystem: greeterSystem)
+    greeterSystem.host(actor)
+    return actor
+}()
+
+@RPC func __workersSwiftDistributedCall(
+    _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
+) async throws -> JSValue {
+    _ = greeter // force the lazy top-level `let` to initialize
+    return try await greeterSystem.receive(
+        identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
+    )
+}
+
+// Caller side:
+let system = WorkersActorSystem(stub: env.service("SELF"))
+let greeter = try Greeter.resolve(id: "greeter", using: system)
+let greeting = try await greeter.hello("world")
+```
+
+- A `distributed func`'s mangled identifier is never interpreted by this library — it's passed through opaquely to `executeDistributedTarget`, the same Swift runtime mechanism that resolves it on every other platform. Generic `distributed func`s work too, the same way.
+- `WorkersActorSystem(stub:)` + `host(_:)` back one singleton actor per worker, as above. `WorkersActorSystem(durableObjects:)` + `host(_:as:)` instead back one distributed actor instance per Durable Object id, routed dynamically per call — see the [Distributed actors article](https://sevki.github.io/workers-swift/documentation/workersswift/distributedactors) (or `Sources/HelloWorker/Worker.swift`'s `Fork`/`Philosopher` dining-philosophers example) for that case.
+- See [`rfcs/distributed-actor-rpc.md`](rfcs/distributed-actor-rpc.md) for the full design discussion.
+
 ## Repository layout
 
 - `Sources/WorkersSwift`: the library.

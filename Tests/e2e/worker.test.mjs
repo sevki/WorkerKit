@@ -154,6 +154,16 @@ for (const runtime of runtimes) {
       assert.equal(current.body, "2");
     });
 
+    test("Durable Object SQL storage: state.storage.sql across calls", async () => {
+      const first = await request("/counter/sql");
+      assertNotCrashed(first, "/counter/sql");
+      assert.equal(first.body, "1");
+
+      const second = await request("/counter/sql");
+      assertNotCrashed(second, "/counter/sql");
+      assert.equal(second.body, "2");
+    });
+
     test("KV put, getWithMetadata and delete", async () => {
       const put = await request("/kv/greeting", { method: "PUT", body: "hello kv" });
       assertNotCrashed(put, "PUT /kv/greeting");

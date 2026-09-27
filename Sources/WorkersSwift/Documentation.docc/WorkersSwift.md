@@ -59,6 +59,9 @@ away from any Web or Workers API the library does not wrap yet.
 - ``RPC()``
 - ``DurableObjectState``
 - ``DurableObjectStorage``
+- ``SQLStorage``
+- ``SQLCursor``
+- ``SQLRow``
 - ``DurableObjectNamespace``
 - ``DurableObjectStub``
 - ``Fetcher``

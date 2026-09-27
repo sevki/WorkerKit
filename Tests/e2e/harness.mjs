@@ -6,7 +6,7 @@
 //                 "celld" needs a `celld` binary on PATH (or CELLD_BIN).
 
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -104,14 +104,24 @@ const launchers = {
       .map((name) => `, (name = "kv-${name}", worker = .kvWorker)`)
       .join("");
     await writeFile(join(directory, "kv-service.mjs"), kvService);
+    // workerd requires a DiskDirectory's path to already exist.
+    await mkdir(join(directory, "disk"));
+    // enableSql = true exposes state.storage.sql (SQLStorage); every
+    // namespace gets it, since it is harmless for a Durable Object that
+    // never touches it. Unlike inMemory, a SQLite-backed namespace needs
+    // disk-backed storage, so a DiskDirectory service backs it with a
+    // subdirectory of this run's own temporary directory.
     const namespaces = Object.values(durableObjects)
-      .map((className) => `(className = ${JSON.stringify(className)}, uniqueKey = "workers-swift-e2e-${className}")`)
+      .map((className) => `(className = ${JSON.stringify(className)}, uniqueKey = "workers-swift-e2e-${className}", enableSql = true)`)
       .join(", ");
     await writeFile(join(directory, "config.capnp"), `
 using Workerd = import "/workerd/workerd.capnp";
 
 const config :Workerd.Config = (
-  services = [(name = "main", worker = .worker)${kvServices}],
+  services = [
+    (name = "main", worker = .worker)${kvServices},
+    (name = "disk", disk = (path = ${JSON.stringify(join(directory, "disk"))}, writable = true)),
+  ],
   sockets = [(name = "http", address = "127.0.0.1:${port}", http = (), service = "main")],
 );
 
@@ -122,7 +132,7 @@ const worker :Workerd.Worker = (
   ],
   bindings = [${bindings}],
   durableObjectNamespaces = [${namespaces}],
-  durableObjectStorage = (inMemory = void),
+  durableObjectStorage = (localDisk = "disk"),
   compatibilityDate = "2026-01-01",
 );
 

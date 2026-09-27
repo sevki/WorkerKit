@@ -71,6 +71,13 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         let response = try await env.durableObject("COUNTER").get(named: "e2e").fetch("https://counter/")
         return .text(try await response.text(), status: response.status)
 
+    case ("GET", "/counter/sql"):
+        // SQL storage: increments a row in a SQLite table kept by the
+        // object's own state.storage.sql, and returns it decoded as a
+        // Decodable struct.
+        let count = try await env.durableObject("COUNTER").get(named: "e2e").call("sqlIncrement", 1, as: Int.self)
+        return .ok(String(count))
+
     case ("GET", "/kv"):
         // Lists the KV keys under ?prefix=, a page of ?limit= at a time.
         let query = JSObject.global.URL.object!.new(req.url).searchParams.object!
@@ -145,5 +152,24 @@ final class Counter {
         let count = (try await state.storage.get("count", as: Int.self) ?? 0) + amount
         try await state.storage.put("count", count)
         return count
+    }
+
+    /// A second counter, kept in a SQLite table instead of the key-value
+    /// store `increment(by:)` uses, to exercise `state.storage.sql`.
+    @RPC func sqlIncrement(by amount: Int) throws -> Int {
+        struct CounterRow: Decodable {
+            let value: Int
+        }
+        let sql = state.storage.sql
+        try sql.exec("CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER NOT NULL)")
+        try sql.exec(
+            "INSERT INTO counters (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = value + excluded.value",
+            "sql", amount
+        )
+        let rows = try sql.query("SELECT value FROM counters WHERE name = ?", "sql", as: CounterRow.self)
+        guard let row = rows.first else {
+            throw JSException(message: "counters row went missing")
+        }
+        return row.value
     }
 }

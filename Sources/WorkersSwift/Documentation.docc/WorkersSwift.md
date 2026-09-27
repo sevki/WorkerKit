@@ -51,6 +51,7 @@ away from any Web or Workers API the library does not wrap yet.
 - ``Context``
 - <doc:KVStorage>
 - <doc:DurableObjects>
+- <doc:DistributedActors>
 
 ### Durable Objects and RPC
 
@@ -67,6 +68,13 @@ away from any Web or Workers API the library does not wrap yet.
 - ``Fetcher``
 - ``RPCStub``
 - ``FetchResponse``
+
+### Distributed actors
+
+- ``WorkersActorSystem``
+- ``WorkersInvocationEncoder``
+- ``WorkersInvocationDecoder``
+- ``WorkersInvocationResultHandler``
 
 ### KV
 

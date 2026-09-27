@@ -30,6 +30,32 @@ succeeds, `remoteCall` never actually leaves the process) built, ran under
 workerd, and correctly routed calls through the distributed-actor machinery
 end to end.
 
+**Update: option 4's premise is now verified, not just proposed.** The
+spike was extended so `remoteCall`/`remoteCallVoid` capture
+`target`/the encoded arguments (as a real transport's send side would),
+then re-dispatch by calling `executeDistributedTarget(on:target:
+invocationDecoder:handler:)` against a real local `Greeter` instance — the
+same shape a callee-side `WorkersActorSystem` would use after receiving a
+call over Workers RPC. Both natively (x86_64) and under real workerd on
+wasm32, this correctly resolved every mangled identifier and invoked the
+actual method:
+
+```
+greet -> identifier=$s10DistSpike27GreeterC5greet_5timesS2S_SitYaKFTE
+greet -> result=Hello, world! x3 (expect "Hello, world! x3")
+increment -> identifier=$s10DistSpike27GreeterC9increment2byS2i_tYaKFTE
+increment -> result=6 (expect 6)
+reset -> identifier=$s10DistSpike27GreeterC5resetyyYaKFTE
+reset -> completed without throwing (expect "reset() actually ran" printed above)
+```
+
+`greet` returned exactly `"Hello, world! x3"`, `increment` returned `6`
+(the compiler-computed result, not an echo of the input), and `reset`
+genuinely ran. No code anywhere parsed or demangled the identifier — the
+Swift runtime's own accessor lookup did the resolution, on wasm32, under
+workerd. This answers open question 1 below: yes, option 4 holds up, and
+options 1–3 are not needed for dispatch.
+
 ## The blocker (revised — see Codex's review)
 
 `DistributedActorSystem.remoteCall`/`remoteCallVoid` receive a
@@ -66,7 +92,7 @@ routing through `executeDistributedTarget` sidesteps entirely. See option 4.
 
 ## Options
 
-### 4. Pass the mangled identifier straight through (Codex's correction)
+### 4. Pass the mangled identifier straight through (Codex's correction — verified)
 
 Give `distributed actor` its own transport entirely, separate from `@RPC`,
 and never interpret `target.identifier` at all:
@@ -82,25 +108,20 @@ and never interpret `target.identifier` at all:
   runtime, using the same mangled-name-keyed accessor lookup the language
   runtime already relies on for distributed actors on every other platform.
 
-If this holds up, it removes the mangling problem as originally framed —
-no demangler, no build-time table, no `worker-build` involvement — and
-options 1 and 2 become unnecessary for *dispatch* (they might still be
-useful for logging/observability of a human-readable method name, but
-that's a much smaller ask). The open question this raises is new: does the
-runtime machinery behind `executeDistributedTarget`'s accessor lookup — the
-"distributed thunk" / accessor-table mechanism the Swift runtime normally
-uses to resolve a mangled identifier back to a callable function — actually
-work under this project's real constraints (wasm32, no Darwin runtime,
-whatever subset of Swift's runtime metadata `swift-wasm`'s build carries)?
-That needs its own spike before this can be trusted over options 1–3: a
-`WorkersActorSystem.executeDistributedTarget` call, on a `distributed actor`
-whose identifier arrived as a value (not a compile-time literal at the same
-call site), needs to actually resolve and invoke correctly on wasm32/
-workerd.
+**Verified** (see "What's confirmed" above): a round-trip spike — capture
+`target`/encoded arguments in `remoteCall`, then call
+`executeDistributedTarget` against a real local instance, exactly as a
+callee-side `WorkersActorSystem` would — correctly resolved and invoked
+`greet`, `increment`, and `reset` under real workerd on wasm32, matching a
+native (x86_64) run exactly. This removes the mangling problem as
+originally framed: no demangler, no build-time table, no `worker-build`
+involvement. Options 1 and 2 are not needed for dispatch (they might still
+be useful for logging/observability of a human-readable method name, but
+that's a much smaller ask, and not something this document pursues further
+for now).
 
-The remaining options are fallbacks if option 4's runtime resolution turns
-out not to work under wasm32, and describe converting the mangled
-identifier into something we dispatch on ourselves instead.
+The remaining options (1–3) are kept below for completeness/record, but are
+no longer live candidates for dispatch — see "What's confirmed" for why.
 
 ### 1. Runtime parsing
 
@@ -173,37 +194,37 @@ looking at this in the first place.
 
 ## Open questions for review
 
-1. **(New, per Codex's review.)** Does `executeDistributedTarget`'s
-   mangled-identifier resolution actually work under this project's real
-   constraints — wasm32, no Darwin runtime, whatever subset of Swift's
-   runtime metadata `swift-wasm` carries? This needs a dedicated spike
-   before option 4 can be trusted over the fallbacks. If it works, most of
-   the rest of this document (options 1–3, and most of the questions below)
-   is moot for dispatch purposes.
-2. If option 4 doesn't hold up and we fall back to options 1–3: are the
-   mangled identifiers actually recoverable from the compiled `.wasm`
-   module at build time (see option 2's first bullet), or does that require
-   a spike result we don't have yet before option 2 is viable at all?
-3. If option 2 is viable: shell out to `swift demangle` via the toolchain
-   path `WorkerBuild` already resolves, or vendor `oozoofrog/SwiftDemangle`
-   (which per Codex's review would need to be copied into the plugin's
-   sources or wrapped as a separate executable tool target, not linked as a
-   plugin dependency)? The `PATH`/external-process concern that originally
-   motivated vendoring doesn't hold, so shelling out now looks like the
-   default unless the output-parsing burden changes that.
-4. Where should a resolved `{mangled: plain}` table (options 1–3 only) live
-   at runtime — inlined as JSON into the generated `worker.mjs`, or as a
-   Wasm custom section read at `_initialize()`?
-5. How do any of these approaches handle generic `distributed func`s, where
-   the mangled identifier encodes the generic signature? Does a dispatch
-   table need to be keyed more coarsely than "one entry per identifier", or
-   is genericity on a distributed method out of scope entirely? (For option
-   4 this may not matter, since resolution happens in the runtime rather
-   than a table we build.)
-6. For options 1–3, which are toolchain-mangling-scheme-dependent: is a
-   build-time table regenerated per build (so it can't drift from the
-   toolchain actually used) an acceptable answer to versioning concerns, or
-   does this need an explicit compatibility check?
-7. Is any of this (option 4 included) worth the complexity over option 3 —
-   not using `distributed actor` for RPC dispatch at all — given `@RPC`
-   already works and is shipped?
+Question 1 from the previous revision of this document — whether
+`executeDistributedTarget`'s mangled-identifier resolution actually works
+under wasm32/workerd — is answered: yes, verified by spike (see "What's
+confirmed"). What's left is about actually building option 4:
+
+1. What does `WorkersActorSystem`'s wire format need to carry per call?
+   Concretely: `target.identifier` (opaque string), the actor `id` to route
+   to (which Durable Object / binding), and the encoder's recorded
+   arguments — encoded how? The spike's `MinimalInvocationEncoder` just
+   boxes Swift values in `[Any]` in-process; a real transport needs actual
+   serialization (JSON via `Codable`, most likely) crossing the Workers RPC
+   boundary.
+2. What does the "one fixed, always-registered Workers RPC method" per
+   Durable Object/binding look like concretely — a reserved method name
+   (e.g. `__distributedCall`) that `worker-build` always emits, separate
+   from `rpcExports`/`durableObjectExports`? Does it need `worker-build`
+   involvement at all, or can it be plain `WorkersSwift` library code (an
+   RPC target the macros don't need to know about)?
+3. How does the callee side know *which* local actor instance to run
+   `executeDistributedTarget` against for a given call — is this scoped to
+   "one distributed actor per Durable Object instance" (so the DO's own
+   identity is the actor's identity), or does a single DO/binding need to
+   host multiple distributed actor ids?
+4. Error handling: `executeDistributedTarget`'s `handler.onThrow` receives
+   the real thrown error, but that error has to cross the RPC boundary back
+   to the caller somehow — does that reuse whatever `@RPC`/`RPCStub`
+   already does for thrown errors, or does it need its own encoding?
+5. Is this worth building at all over just keeping `@RPC`/`RPCStub` (option
+   3)? The demangling risk that originally made this feel exploratory is
+   gone; the remaining cost is a small, self-contained transport (per Q1–4
+   above), which changes the tradeoff considerably in favor of building it.
+
+Options 1–3 above are kept for the record but are no longer live
+candidates — see "What's confirmed".

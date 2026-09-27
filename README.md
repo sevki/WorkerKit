@@ -24,7 +24,7 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
 
 | workers-rs | workers-swift |
 |---|---|
-| `worker` (`Request`, `Response`, `Env`, `Context`, `KvStore`, …) | `WorkersSwift` (`KVStore` for `KvStore`) |
+| `worker` (`Request`, `Response`, `Env`, `Context`, `KvStore`, `SqlStorage`, …) | `WorkersSwift` (`KVStore` for `KvStore`, `SQLStorage` for `SqlStorage`) |
 | `#[event(fetch)]` | `@Event(.fetch)` (`WorkersSwiftMacros`) |
 | `#[durable_object]` + `impl DurableObject` | `@DurableObject` class, with `@RPC` methods |
 | `wasm-bindgen`, `js-sys`, `wasm-bindgen-futures` | [JavaScriptKit](https://github.com/swiftwasm/JavaScriptKit) and JavaScriptEventLoop |
@@ -86,6 +86,25 @@ let response = try await counter.fetch("https://counter/")
 - RPC arguments and results convert through JavaScriptKit's `ConstructibleFromJSValue` and `ConvertibleToJSValue` (`Int`, `Double`, `String`, `Bool`, …).
 - `DurableObjectState.storage` offers `get(_:as:)`, `put(_:_:)` and `delete(_:)`, and `jsObject` for the rest of the storage API.
 - Bind the class as usual, for example in wrangler.jsonc: `"durable_objects": { "bindings": [{ "name": "COUNTER", "class_name": "Counter" }] }` with a migration that adds `Counter`.
+
+### SQL storage
+
+Every Durable Object is SQLite-backed once created with `new_sqlite_classes` (the migration above), and `state.storage.sql` gives direct access to that database:
+
+```swift
+let sql = state.storage.sql
+try sql.exec("CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER)")
+try sql.exec(
+    "INSERT INTO counters (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = value + excluded.value",
+    "x", amount
+)
+let count = try sql.exec("SELECT value FROM counters WHERE name = ?", "x").rows().first?["value", as: Int.self]
+```
+
+- `SQLStorage`, like workers-rs' `SqlStorage`: `exec(_:_:)` runs a query with positional `?` bindings and returns a `SQLCursor`. SQLite runs in the same process as the Durable Object, so `exec` is synchronous even though it can throw — a syntax error or constraint violation is thrown from `exec` itself, not later.
+- `SQLCursor.rows()` returns each row as a `SQLRow` (`row["column", as: Int.self]`, or `.bytes("column")` for a `BLOB`); `.columnNames`, `.rowsRead` and `.rowsWritten` are also available.
+- `SQLStorage.query(_:_:as:)` and `SQLCursor.decode(as:)` decode rows straight into a `Decodable` type, matching columns to its properties by name.
+- workerd's own configuration (not Wrangler's) also needs `enableSql = true` on the namespace.
 
 ## RPC over service bindings
 

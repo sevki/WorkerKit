@@ -60,6 +60,25 @@ let response = try await counter.fetch("https://counter/")
 is an ``RPCStub``: `call(_:_:...as:)` for RPC and `fetch(_:)` for a plain
 request.
 
+## SQL storage
+
+Every Durable Object is SQLite-backed by default (the `new_sqlite_classes` migration new classes get automatically); its ``DurableObjectState/storage`` also exposes that SQLite database directly through ``DurableObjectStorage/sql``:
+
+```swift
+let sql = state.storage.sql
+try sql.exec("CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER)")
+try sql.exec(
+    "INSERT INTO counters (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = value + excluded.value",
+    "x", amount
+)
+let count = try sql.exec("SELECT value FROM counters WHERE name = ?", "x").rows().first?["value", as: Int.self]
+```
+
+- `?` in a query is a positional placeholder, bound to the arguments that follow, in order.
+- SQLite runs in the same process as the Durable Object, so ``SQLStorage/exec(_:_:)`` is synchronous even though it can throw — there is no `await`, and, unlike the key-value `get`/`put`/`delete` above, a statement takes effect immediately.
+- ``SQLStorage/query(_:_:as:)`` runs a `SELECT` and decodes each row straight into a `Decodable` type with ``SQLCursor/decode(as:)``, matching columns to its properties by name.
+- In workerd's own configuration (not Wrangler's), a namespace also needs `enableSql = true` before `.sql` is available.
+
 ## RPC over service bindings
 
 `@RPC` on a top-level function makes it a method of the worker's default
@@ -93,6 +112,12 @@ default export a `WorkerEntrypoint` class (from `cloudflare:workers`) with
 
 - ``DurableObjectState``
 - ``DurableObjectStorage``
+
+### SQL storage
+
+- ``SQLStorage``
+- ``SQLCursor``
+- ``SQLRow``
 
 ### Calling Durable Objects and service bindings
 

@@ -178,6 +178,20 @@ for (const runtime of runtimes) {
       assert.equal(result.body, "hello distributed");
     });
 
+    test("distributed actor over Workers RPC: Int64 survives as a JS BigInt, not a rounded Double", async () => {
+      const result = await request("/distributed/bignumber");
+      assertNotCrashed(result, "/distributed/bignumber");
+      assert.equal(result.response.status, 200);
+      assert.equal(result.body, "match");
+    });
+
+    test("distributed actor over Workers RPC: superEncoder()/superEncoder(forKey:) keep base-class fields", async () => {
+      const result = await request("/distributed/dog");
+      assertNotCrashed(result, "/distributed/dog");
+      assert.equal(result.response.status, 200);
+      assert.equal(result.body, "Rex is a Labrador");
+    });
+
     test("KV put, getWithMetadata and delete", async () => {
       const put = await request("/kv/greeting", { method: "PUT", body: "hello kv" });
       assertNotCrashed(put, "PUT /kv/greeting");

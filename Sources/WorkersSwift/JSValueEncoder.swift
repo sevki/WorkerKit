@@ -1,3 +1,4 @@
+import JavaScriptBigIntSupport
 import JavaScriptKit
 
 /// Encodes an `Encodable` Swift value into a `JSValue` tree: an `Encodable`
@@ -5,10 +6,19 @@ import JavaScriptKit
 /// a JS object, an unkeyed container becomes a JS array, and a value that is
 /// itself `ConvertibleToJSValue` (`String`, `Int`, `Bool`, ...) is encoded
 /// directly rather than through its `Codable` conformance.
+///
+/// `Int64`/`UInt64` are encoded as a JS `BigInt`, not the `ConvertibleToJSValue`
+/// default of a `Double`-backed JS number: a `Double` can't represent every
+/// `Int64`/`UInt64` value exactly (anything outside ±2^53), which would
+/// silently corrupt an id, counter, or timestamp near the top of that range.
+/// `JSValueDecoder` already reads a `BigInt` back losslessly.
 public final class JSValueEncoder {
     public init() {}
 
     public func encode<T: Encodable>(_ value: T) throws -> JSValue {
+        if let big = _bigIntJSValue(for: value) {
+            return big
+        }
         if let convertible = value as? ConvertibleToJSValue {
             return convertible.jsValue
         }
@@ -18,8 +28,29 @@ public final class JSValueEncoder {
     }
 }
 
+/// `Int64`/`UInt64` as a lossless `JSValue`, or `nil` for any other type
+/// (including `Int`/`UInt`, which are 32-bit — and so `Double`-safe — on
+/// this package's wasm32 target).
+private func _bigIntJSValue(for value: some Encodable) -> JSValue? {
+    switch value {
+    case let v as Int64: return JSBigInt(v).jsValue
+    case let v as UInt64: return JSBigInt(unsigned: v).jsValue
+    default: return nil
+    }
+}
+
+/// `_EncodingStorage.value`'s setter also runs `onSet`, so a nested encoder
+/// created to back `superEncoder()`/`superEncoder(forKey:)` writes straight
+/// through to its parent container the moment something is actually encoded
+/// into it — the parent can't take a one-time snapshot at creation time, the
+/// way a container's own `nestedContainer`/plain `encode<T>` can, because it
+/// hands the encoder back to the caller instead of driving it directly.
 private final class _EncodingStorage {
-    var value: JSValue = .undefined
+    var onSet: ((JSValue) -> Void)?
+
+    var value: JSValue = .undefined {
+        didSet { onSet?(value) }
+    }
 }
 
 private struct _Encoder: Swift.Encoder {
@@ -27,7 +58,11 @@ private struct _Encoder: Swift.Encoder {
     let codingPath: [CodingKey]
     let userInfo: [CodingUserInfoKey: Any]
 
-    init(storage: _EncodingStorage = _EncodingStorage(), codingPath: [CodingKey] = [], userInfo: [CodingUserInfoKey: Any]) {
+    init(
+        storage: _EncodingStorage = _EncodingStorage(),
+        codingPath: [CodingKey] = [],
+        userInfo: [CodingUserInfoKey: Any]
+    ) {
         self.storage = storage
         self.codingPath = codingPath
         self.userInfo = userInfo
@@ -49,8 +84,12 @@ private struct _Encoder: Swift.Encoder {
         self
     }
 
-    func nestedEncoder(with key: CodingKey) -> _Encoder {
-        _Encoder(codingPath: codingPath + [key], userInfo: userInfo)
+    /// A fresh encoder whose eventual value — however it's set, including
+    /// through a container obtained later on — is reported to `onSet`.
+    func nestedEncoder(with key: CodingKey, onSet: @escaping (JSValue) -> Void) -> _Encoder {
+        let nested = _Encoder(codingPath: codingPath + [key], userInfo: userInfo)
+        nested.storage.onSet = onSet
+        return nested
     }
 }
 
@@ -69,12 +108,13 @@ private struct _KeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContainerPr
     }
 
     mutating func encode<T>(_ value: T, forKey key: Key) throws where T: Encodable {
-        if let convertible = value as? ConvertibleToJSValue {
+        if let big = _bigIntJSValue(for: value) {
+            _encode(big, forKey: key)
+        } else if let convertible = value as? ConvertibleToJSValue {
             _encode(convertible.jsValue, forKey: key)
         } else {
-            let nested = encoder.nestedEncoder(with: key)
+            let nested = encoder.nestedEncoder(with: key) { [object] value in object[key.stringValue] = value }
             try value.encode(to: nested)
-            _encode(nested.storage.value, forKey: key)
         }
     }
 
@@ -82,25 +122,22 @@ private struct _KeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContainerPr
         keyedBy _: NestedKey.Type,
         forKey key: Key
     ) -> KeyedEncodingContainer<NestedKey> where NestedKey: CodingKey {
-        let nested = encoder.nestedEncoder(with: key)
-        let container = nested.container(keyedBy: NestedKey.self)
-        _encode(nested.storage.value, forKey: key)
-        return container
+        let nested = encoder.nestedEncoder(with: key) { [object] value in object[key.stringValue] = value }
+        return nested.container(keyedBy: NestedKey.self)
     }
 
     mutating func nestedUnkeyedContainer(forKey key: Key) -> UnkeyedEncodingContainer {
-        let nested = encoder.nestedEncoder(with: key)
-        let container = nested.unkeyedContainer()
-        _encode(nested.storage.value, forKey: key)
-        return container
+        let nested = encoder.nestedEncoder(with: key) { [object] value in object[key.stringValue] = value }
+        return nested.unkeyedContainer()
     }
 
     mutating func superEncoder() -> Encoder {
-        encoder.nestedEncoder(with: _JSCodingKey(stringValue: "super")!)
+        let key = _JSCodingKey(stringValue: "super")!
+        return encoder.nestedEncoder(with: key) { [object] value in object[key.stringValue] = value }
     }
 
     mutating func superEncoder(forKey key: Key) -> Encoder {
-        encoder.nestedEncoder(with: key)
+        encoder.nestedEncoder(with: key) { [object] value in object[key.stringValue] = value }
     }
 }
 
@@ -116,40 +153,49 @@ private struct _UnkeyedEncodingContainer: UnkeyedEncodingContainer {
         count += 1
     }
 
+    /// Reserves the next index for a nested encoder that will fill it in
+    /// later, rather than appending its value now: `nested.storage.onSet`
+    /// writes through to this exact index whenever it fires.
+    private mutating func _reserveNext() -> Int {
+        let index = count
+        _ = array.push!(JSValue.undefined)
+        count += 1
+        return index
+    }
+
     mutating func encodeNil() throws {
         _append(.null)
     }
 
     mutating func encode<T>(_ value: T) throws where T: Encodable {
-        if let convertible = value as? ConvertibleToJSValue {
+        if let big = _bigIntJSValue(for: value) {
+            _append(big)
+        } else if let convertible = value as? ConvertibleToJSValue {
             _append(convertible.jsValue)
         } else {
-            let nested = encoder.nestedEncoder(with: _JSCodingKey(index: count))
+            let index = _reserveNext()
+            let nested = encoder.nestedEncoder(with: _JSCodingKey(index: index)) { [array] value in array[index] = value }
             try value.encode(to: nested)
-            _append(nested.storage.value)
         }
     }
 
     mutating func nestedContainer<NestedKey>(
         keyedBy _: NestedKey.Type
     ) -> KeyedEncodingContainer<NestedKey> where NestedKey: CodingKey {
-        let nested = encoder.nestedEncoder(with: _JSCodingKey(index: count))
-        let container = nested.container(keyedBy: NestedKey.self)
-        _append(nested.storage.value)
-        return container
+        let index = _reserveNext()
+        let nested = encoder.nestedEncoder(with: _JSCodingKey(index: index)) { [array] value in array[index] = value }
+        return nested.container(keyedBy: NestedKey.self)
     }
 
     mutating func nestedUnkeyedContainer() -> UnkeyedEncodingContainer {
-        let nested = encoder.nestedEncoder(with: _JSCodingKey(index: count))
-        let container = nested.unkeyedContainer()
-        _append(nested.storage.value)
-        return container
+        let index = _reserveNext()
+        let nested = encoder.nestedEncoder(with: _JSCodingKey(index: index)) { [array] value in array[index] = value }
+        return nested.unkeyedContainer()
     }
 
     mutating func superEncoder() -> Encoder {
-        let nested = encoder.nestedEncoder(with: _JSCodingKey(index: count))
-        _append(nested.storage.value)
-        return nested
+        let index = _reserveNext()
+        return encoder.nestedEncoder(with: _JSCodingKey(index: index)) { [array] value in array[index] = value }
     }
 }
 
@@ -159,7 +205,9 @@ extension _Encoder: SingleValueEncodingContainer {
     }
 
     func encode<T>(_ value: T) throws where T: Encodable {
-        if let convertible = value as? ConvertibleToJSValue {
+        if let big = _bigIntJSValue(for: value) {
+            storage.value = big
+        } else if let convertible = value as? ConvertibleToJSValue {
             storage.value = convertible.jsValue
         } else {
             try value.encode(to: self)

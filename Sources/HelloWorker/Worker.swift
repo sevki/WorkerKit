@@ -142,6 +142,24 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         let echoed = try await doubler.echo(try await req.text())
         return .ok(echoed)
 
+    case ("GET", "/distributed/bignumber"):
+        // 2^53 + 1: not exactly representable as a Double, so this proves
+        // JSValueEncoder/JSValueDecoder round-trip Int64 through a JS
+        // BigInt rather than JavaScriptKit's default Double-backed number.
+        let callerSystem = WorkersActorSystem(stub: env.service("SELF"))
+        let doubler = try Doubler.resolve(id: "doubler", using: callerSystem)
+        let n: Int64 = 9_007_199_254_740_993
+        let result = try await doubler.bigNumber(n)
+        return .ok(result == n ? "match" : "mismatch: \(result) != \(n)")
+
+    case ("GET", "/distributed/dog"):
+        // Exercises JSValueEncoder's superEncoder()/superEncoder(forKey:)
+        // through a two-level Codable class hierarchy.
+        let callerSystem = WorkersActorSystem(stub: env.service("SELF"))
+        let doubler = try Doubler.resolve(id: "doubler", using: callerSystem)
+        let result = try await doubler.identify(Dog(name: "Rex", breed: "Labrador"))
+        return .ok(result)
+
     case ("GET", "/no-content"):
         return .empty()
 
@@ -174,6 +192,62 @@ distributed actor Doubler {
     /// plain arguments.
     distributed func echo<T: Codable & Sendable>(_ value: T) -> T {
         value
+    }
+
+    /// Exercises the lossless Int64 wire encoding: 9007199254740993
+    /// (2^53 + 1) is not exactly representable as a Double, so this would
+    /// come back rounded if JSValueEncoder/JSValueDecoder fell through to
+    /// JavaScriptKit's default Double-backed JS number conversion.
+    distributed func bigNumber(_ n: Int64) -> Int64 {
+        n
+    }
+
+    /// Exercises JSValueEncoder's superEncoder()/superEncoder(forKey:): Dog
+    /// only encodes/decodes its own `breed` directly, delegating `name` to
+    /// Animal's Codable conformance through super.encode(to:)/super.init(from:).
+    distributed func identify(_ dog: Dog) -> String {
+        "\(dog.name) is a \(dog.breed)"
+    }
+}
+
+class Animal: Codable {
+    let name: String
+    private enum CodingKeys: String, CodingKey { case name }
+
+    init(name: String) {
+        self.name = name
+    }
+
+    required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+    }
+}
+
+final class Dog: Animal, @unchecked Sendable {
+    let breed: String
+    private enum CodingKeys: String, CodingKey { case breed }
+
+    init(name: String, breed: String) {
+        self.breed = breed
+        super.init(name: name)
+    }
+
+    required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        breed = try container.decode(String.self, forKey: .breed)
+        try super.init(from: container.superDecoder())
+    }
+
+    override func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(breed, forKey: .breed)
+        try super.encode(to: container.superEncoder())
     }
 }
 

@@ -69,13 +69,13 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
     /// A callee-side system: never originates a call itself. Register the
     /// actor it hosts with ``host(_:)``, then forward
     /// ``WorkersActorSystem/entryPointName``'s `@RPC` method to
-    /// ``receive(identifier:arguments:)``.
+    /// ``receive(identifier:arguments:genericSubstitutions:)``.
     public init() {
         self.stub = nil
     }
 
     /// Registers `actor` as this system's one locally-hosted distributed
-    /// actor: what `receive(identifier:arguments:)` runs a call against.
+    /// actor: what `receive(identifier:arguments:genericSubstitutions:)` runs a call against.
     public func host<Act: DistributedActor>(_ actor: Act) where Act.ActorSystem == WorkersActorSystem {
         localActor = actor
     }

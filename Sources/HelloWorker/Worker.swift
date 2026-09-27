@@ -133,6 +133,15 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         let doubled = try await doubler.double(n)
         return .ok(String(doubled))
 
+    case ("POST", "/distributed/echo"):
+        // The same call path as /distributed/double/, but through a generic
+        // distributed func: exercises recordGenericSubstitution /
+        // decodeGenericSubstitutions, not just plain arguments.
+        let callerSystem = WorkersActorSystem(stub: env.service("SELF"))
+        let doubler = try Doubler.resolve(id: "doubler", using: callerSystem)
+        let echoed = try await doubler.echo(try await req.text())
+        return .ok(echoed)
+
     case ("GET", "/no-content"):
         return .empty()
 
@@ -159,6 +168,13 @@ distributed actor Doubler {
     distributed func double(_ n: Int) -> Int {
         n * 2
     }
+
+    /// A generic distributed func: exercises generic-substitution transport
+    /// (recordGenericSubstitution/decodeGenericSubstitutions), not just
+    /// plain arguments.
+    distributed func echo<T: Codable & Sendable>(_ value: T) -> T {
+        value
+    }
 }
 
 /// The callee-side system this worker hosts `Doubler` on, and the one fixed
@@ -170,13 +186,17 @@ private let doubler: Doubler = {
     return actor
 }()
 
-@RPC func __workersSwiftDistributedCall(_ identifier: String, _ arguments: JSValue) async throws -> JSValue {
+@RPC func __workersSwiftDistributedCall(
+    _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
+) async throws -> JSValue {
     // A top-level `let` initializes lazily, on first access — and nothing
     // else in this file touches the module-level `doubler`, so without this
     // its initializer (which hosts it on `distributedSystem`) would never
     // run before a call arrives here.
     _ = doubler
-    return try await distributedSystem.receive(identifier: identifier, arguments: arguments)
+    return try await distributedSystem.receive(
+        identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
+    )
 }
 
 /// A Durable Object that counts in its storage.

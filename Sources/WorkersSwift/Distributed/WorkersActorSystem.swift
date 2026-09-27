@@ -12,6 +12,14 @@ import JavaScriptKit
 /// `rfcs/distributed-actor-rpc.md` for why that's sound and how it was
 /// verified.
 ///
+/// A generic `distributed func` is supported: each generic parameter's
+/// concrete type crosses the wire as its mangled type name
+/// (`_mangledTypeName`), and the callee resolves it back to a real `Any.Type`
+/// with `_typeByName` — the same "let the Swift runtime do it" approach that
+/// makes the method identifier itself safe to leave mangled. A substitution
+/// that names a type not present in the callee's binary (or stripped from
+/// it) fails to resolve and throws, same as any other decode failure.
+///
 /// **v1 scope:** exactly one locally-hosted actor per `WorkersActorSystem`
 /// (see ``host(_:)``). There's no `ActorID`-based routing to multiple
 /// instances yet — that's future work if this needs to back, say, one
@@ -30,8 +38,12 @@ import JavaScriptKit
 ///     let calleeSystem = WorkersActorSystem()
 ///     calleeSystem.host(Doubler(actorSystem: calleeSystem))
 ///
-///     @RPC func __workersSwiftDistributedCall(_ identifier: String, _ arguments: JSValue) async throws -> JSValue {
-///         try await calleeSystem.receive(identifier: identifier, arguments: arguments)
+///     @RPC func __workersSwiftDistributedCall(
+///         _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
+///     ) async throws -> JSValue {
+///         try await calleeSystem.receive(
+///             identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
+///         )
 ///     }
 public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendable {
     public typealias ActorID = String
@@ -73,14 +85,22 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
     /// interprets the mangled identifier itself), and returns the encoded
     /// result — or throws, if the call target doesn't exist, decoding
     /// fails, or the method itself threw.
-    public func receive(identifier: String, arguments: JSValue) async throws -> JSValue {
+    ///
+    /// `genericSubstitutions` is each generic parameter's mangled type name,
+    /// in order, for a generic `distributed func` (empty for a non-generic
+    /// one) — see `recordGenericSubstitution`/`decodeGenericSubstitutions`.
+    public func receive(
+        identifier: String,
+        arguments: JSValue,
+        genericSubstitutions: [String] = []
+    ) async throws -> JSValue {
         guard let actor = localActor else {
             throw JSException(message: "WorkersActorSystem has no locally-hosted actor to dispatch \(identifier) to")
         }
         guard let argumentList = arguments.object.flatMap(JSArray.init) else {
             throw JSException(message: "WorkersActorSystem: arguments for \(identifier) is not an array")
         }
-        var decoder = WorkersInvocationDecoder(arguments: Array(argumentList))
+        var decoder = WorkersInvocationDecoder(arguments: Array(argumentList), genericSubstitutions: genericSubstitutions)
         let box = WorkersResultBox()
         let handler = WorkersInvocationResultHandler(box: box)
         try await executeDistributedTarget(
@@ -146,7 +166,10 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
         for value in invocation.recorded {
             _ = arguments.push!(value)
         }
-        return try await stub.call(Self.entryPointName, target.identifier, arguments, as: JSValue.self)
+        return try await stub.call(
+            Self.entryPointName, target.identifier, arguments, invocation.genericSubstitutions,
+            as: JSValue.self
+        )
     }
 }
 
@@ -154,8 +177,14 @@ public struct WorkersInvocationEncoder: DistributedTargetInvocationEncoder {
     public typealias SerializationRequirement = Codable
 
     var recorded: [JSValue] = []
+    var genericSubstitutions: [String] = []
 
-    public mutating func recordGenericSubstitution<T>(_ type: T.Type) throws {}
+    public mutating func recordGenericSubstitution<T>(_ type: T.Type) throws {
+        guard let name = _mangledTypeName(type) else {
+            throw JSException(message: "WorkersActorSystem: no mangled type name for \(type) (needed for a generic distributed func call)")
+        }
+        genericSubstitutions.append(name)
+    }
 
     public mutating func recordArgument<Value: Codable>(_ argument: RemoteCallArgument<Value>) throws {
         recorded.append(try JSValueEncoder().encode(argument.value))
@@ -170,9 +199,17 @@ public struct WorkersInvocationDecoder: DistributedTargetInvocationDecoder {
     public typealias SerializationRequirement = Codable
 
     var arguments: [JSValue]
+    var genericSubstitutions: [String] = []
     var index = 0
 
-    public mutating func decodeGenericSubstitutions() throws -> [Any.Type] { [] }
+    public mutating func decodeGenericSubstitutions() throws -> [Any.Type] {
+        try genericSubstitutions.map { name in
+            guard let type = _typeByName(name) else {
+                throw JSException(message: "WorkersActorSystem: no type named \(name) in this binary (generic substitution)")
+            }
+            return type
+        }
+    }
 
     public mutating func decodeNextArgument<Argument: Codable>() throws -> Argument {
         guard index < arguments.count else {

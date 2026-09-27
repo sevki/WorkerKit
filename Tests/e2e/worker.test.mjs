@@ -171,6 +171,13 @@ for (const runtime of runtimes) {
       assert.equal(result.body, "42");
     });
 
+    test("distributed actor over Workers RPC: generic Doubler.echo(_:) through SELF", async () => {
+      const result = await request("/distributed/echo", { method: "POST", body: "hello distributed" });
+      assertNotCrashed(result, "/distributed/echo");
+      assert.equal(result.response.status, 200);
+      assert.equal(result.body, "hello distributed");
+    });
+
     test("KV put, getWithMetadata and delete", async () => {
       const put = await request("/kv/greeting", { method: "PUT", body: "hello kv" });
       assertNotCrashed(put, "PUT /kv/greeting");

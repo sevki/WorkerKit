@@ -2,6 +2,8 @@
 
 Write [Workers](https://developers.cloudflare.com/workers/) in Swift, in the style of [workers-rs](https://github.com/cloudflare/workers-rs). Workers compile to WebAssembly and run on [workerd](https://github.com/cloudflare/workerd) and [denoland/celld](https://github.com/denoland/celld).
 
+📖 **[API documentation](https://sevki.github.io/workers-swift/documentation/workersswift/)**, built with DocC.
+
 ```swift
 import WorkersSwift
 
@@ -103,6 +105,7 @@ When a worker has top-level `@RPC` functions, `worker-build` makes its default e
 ## Repository layout
 
 - `Sources/WorkersSwift`: the library.
+- `Sources/WorkersSwift/Documentation.docc`: the DocC catalog (articles and the landing page); see [Documentation](#documentation).
 - `Sources/WorkersSwiftMacros`: `@Event`.
 - `Sources/HelloWorker`: an example worker, which `Sources/WorkersSwiftWasm` links into `WorkersSwift.wasm`.
 - `Plugins/WorkerBuild`: `swift package worker-build`.
@@ -169,3 +172,32 @@ npm run test:e2e    # the built worker in workerd (after worker-build)
 ```
 
 `npm run test:e2e` serves `build/worker` (or `WORKER_DIR`) with workerd from npm. Set `E2E_RUNTIMES=workerd,celld` to also run it on a `celld` binary on `PATH` (or `CELLD_BIN`). CI builds the worker with the Wasm SDK and runs the suite on both runtimes, and runs `swift test` on Linux and macOS.
+
+## Documentation
+
+The public API is documented with [DocC](https://www.swift.org/documentation/docc/) in doc comments and in `Sources/WorkersSwift/Documentation.docc`, and published at <https://sevki.github.io/workers-swift/documentation/workersswift/> on every push to `main`.
+
+To read it locally instead:
+
+```bash
+swift package --disable-sandbox preview-documentation --target WorkersSwift
+```
+
+This serves the docs and opens them in your browser, rebuilding as you edit. It needs `--disable-sandbox` because the preview server binds a local port; the plugin sandboxes only that server, not your code.
+
+To build the static site yourself, as CI does:
+
+```bash
+swift package --allow-writing-to-directory docs \
+  generate-documentation --target WorkersSwift \
+  --disable-indexing \
+  --transform-for-static-hosting \
+  --hosting-base-path workers-swift \
+  --output-path docs
+```
+
+`--hosting-base-path workers-swift` matches this repository being served from `https://sevki.github.io/workers-swift/`; drop it (and adjust the links above) if you publish from a custom domain or the root of a `<user>.github.io` repository instead. CI also runs `swift package generate-documentation --target WorkersSwift --warnings-as-errors` on every pull request, so a broken `<doc:...>` link or an undocumented symbol referenced from an article fails the build before it reaches `main`.
+
+### Publishing to GitHub Pages
+
+The `docs` and `publish-docs` jobs in `.github/workflows/ci.yml` build the static site on every push to `main` and deploy it with `actions/deploy-pages`. That needs GitHub Pages enabled once, with its source set to **GitHub Actions**: repository **Settings → Pages → Build and deployment → Source → GitHub Actions**. After that, every push to `main` that changes the docs (or the code they document) updates the published site within a few minutes.

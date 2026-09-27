@@ -9,6 +9,8 @@ public final class Request: @unchecked Sendable {
     /// The underlying JavaScript `Request`.
     public let jsObject: JSObject
 
+    /// Wraps the runtime's `Request` object. `@Event(.fetch)` constructs
+    /// this for you.
     public init(_ jsObject: JSObject) {
         self.jsObject = jsObject
     }

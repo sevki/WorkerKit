@@ -5,6 +5,8 @@ public final class Env: @unchecked Sendable {
     /// The underlying JavaScript `env` object.
     public let jsObject: JSObject
 
+    /// Wraps the runtime's `env` object. `@Event(.fetch)` and
+    /// `@DurableObject` construct this for you.
     public init(_ jsObject: JSObject) {
         self.jsObject = jsObject
     }

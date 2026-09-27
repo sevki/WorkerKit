@@ -1,0 +1,76 @@
+# ``WorkersSwift``
+
+Write Cloudflare Workers in Swift, in the style of [workers-rs](https://github.com/cloudflare/workers-rs), and run them on [workerd](https://github.com/cloudflare/workerd) and [denoland/celld](https://github.com/denoland/celld).
+
+## Overview
+
+A worker is a Swift package that depends on `WorkersSwift` and exposes one
+`@Event(.fetch)` function:
+
+```swift
+import WorkersSwift
+
+@Event(.fetch)
+func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
+    switch (req.method, req.path) {
+    case ("GET", "/"):
+        return .ok("Hello from Swift")
+    case ("POST", "/echo"):
+        return .ok(try await req.text())
+    default:
+        return .error("Not Found", 404)
+    }
+}
+```
+
+`swift package worker-build` compiles that into a WASI reactor module and
+bundles it with a JavaScript shim into a single `worker.mjs`, which workerd
+and celld run directly. See <doc:GettingStarted> for the full setup.
+
+`Request`, `Headers`, `Env`, `Context` and `Response` wrap the runtime's own
+JavaScript objects; each type's `jsObject` property is one JavaScriptKit call
+away from any Web or Workers API the library does not wrap yet.
+
+## Topics
+
+### Getting started
+
+- <doc:GettingStarted>
+- ``Event(_:)``
+- ``WorkerEvent``
+
+### Requests and responses
+
+- ``Request``
+- ``Headers``
+- ``Response``
+
+### Bindings
+
+- ``Env``
+- ``Context``
+- <doc:KVStorage>
+- <doc:DurableObjects>
+
+### Durable Objects and RPC
+
+- ``DurableObject``
+- ``DurableObject()``
+- ``RPC()``
+- ``DurableObjectState``
+- ``DurableObjectStorage``
+- ``DurableObjectNamespace``
+- ``DurableObjectStub``
+- ``Fetcher``
+- ``RPCStub``
+- ``FetchResponse``
+
+### KV
+
+- ``KVStore``
+- ``KVListResult``
+- ``KVKey``
+
+### The generated runtime entry points
+
+- ``WorkersRuntime``

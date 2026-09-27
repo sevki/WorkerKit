@@ -34,10 +34,14 @@ import JavaScriptKit
 ///     let doubler = try Doubler.resolve(id: "doubler", using: system)
 ///     let result = try await doubler.double(21)
 ///
-///     // Caller side, one instance per Durable Object id — reaches
-///     // whichever instance `id` names, routed dynamically per call:
-///     let system = WorkersActorSystem(durableObjects: env.durableObject("FORKS"))
-///     let fork = try Fork.resolve(id: "fork-0", using: system)
+///     // Caller side, one instance per Durable Object id — `id` must be
+///     // the namespace's own hex id (from `idFromName(_:)`, matching what
+///     // the hosting object's own `DurableObjectState.id` is), not an
+///     // arbitrary friendly string; the routing and the hosted actor's own
+///     // identity need to agree on the same id:
+///     let namespace = env.durableObject("FORKS")
+///     let system = WorkersActorSystem(durableObjects: namespace)
+///     let fork = try Fork.resolve(id: namespace.idFromName("fork-0"), using: system)
 ///     let picked = try await fork.tryPickUp()
 ///
 ///     // Callee side — hosts the real instance and exposes the one fixed
@@ -154,7 +158,9 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
         guard let argumentList = arguments.object.flatMap(JSArray.init) else {
             throw JSException(message: "WorkersActorSystem: arguments for \(identifier) is not an array")
         }
-        var decoder = WorkersInvocationDecoder(arguments: Array(argumentList), genericSubstitutions: genericSubstitutions)
+        var decoder = WorkersInvocationDecoder(
+            arguments: Array(argumentList), genericSubstitutions: genericSubstitutions, system: self
+        )
         let box = WorkersResultBox()
         let handler = WorkersInvocationResultHandler(box: box)
         try await executeDistributedTarget(
@@ -204,7 +210,7 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
     ) async throws -> Res
     where Act: DistributedActor, Act.ID == ActorID, Err: Error, Res: SerializationRequirement {
         let value = try await send(id: actor.id, target: target, invocation: invocation)
-        return try JSValueDecoder().decode(Res.self, from: value)
+        return try JSValueDecoder().decode(Res.self, from: value, userInfo: [.actorSystemKey: self])
     }
 
     public func remoteCallVoid<Act, Err>(
@@ -224,7 +230,7 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
         let stub: RPCStub
         switch transport {
         case .fixed(let fixedStub): stub = fixedStub
-        case .perID(let namespace): stub = namespace.get(named: id)
+        case .perID(let namespace): stub = namespace.get(id: id)
         }
         let arguments = JSObject.global.Array.object!.new()
         for value in invocation.recorded {
@@ -264,6 +270,7 @@ public struct WorkersInvocationDecoder: DistributedTargetInvocationDecoder {
 
     var arguments: [JSValue]
     var genericSubstitutions: [String] = []
+    var system: WorkersActorSystem?
     var index = 0
 
     public mutating func decodeGenericSubstitutions() throws -> [Any.Type] {
@@ -280,7 +287,10 @@ public struct WorkersInvocationDecoder: DistributedTargetInvocationDecoder {
             throw JSException(message: "WorkersActorSystem: expected an argument at index \(index)")
         }
         defer { index += 1 }
-        return try JSValueDecoder().decode(Argument.self, from: arguments[index])
+        // An Argument that is itself a distributed actor reference needs
+        // .actorSystemKey in userInfo to resolve its encoded id.
+        let userInfo: [CodingUserInfoKey: Any] = system.map { [.actorSystemKey: $0] } ?? [:]
+        return try JSValueDecoder().decode(Argument.self, from: arguments[index], userInfo: userInfo)
     }
 
     public mutating func decodeErrorType() throws -> (any Any.Type)? { nil }

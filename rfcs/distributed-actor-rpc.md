@@ -259,13 +259,19 @@ questions considered:
   entry point is a plain top-level `@RPC` function
   (`__workersSwiftDistributedCall`), reusing 100% of the existing `@RPC`
   macro/dispatch machinery instead of adding a new export kind.
-- **Actor routing (Q3):** resolved to the narrowest useful case for v1 —
-  exactly one hosted actor instance per `WorkersActorSystem`
-  (`WorkersActorSystem.host(_:)`), i.e. a singleton, mirroring how a
-  top-level `@RPC` function is already "one instance of the default
-  `WorkerEntrypoint` per request". `ActorID`-based routing to multiple
-  instances (e.g. one per Durable Object id) is explicitly future work, not
-  attempted here.
+- **Actor routing (Q3):** supported both ways. `WorkersActorSystem.host(_:)`
+  still gives the narrowest case — one hosted singleton actor per system,
+  mirroring how a top-level `@RPC` function is already "one instance of the
+  default `WorkerEntrypoint` per request" — but `init(durableObjects:)` plus
+  `host(_:as:)` now also route to one distributed actor instance per
+  Durable Object id, chosen dynamically per call from the target actor's
+  own `id`. The two sides have to agree on what that id *is*: a Durable
+  Object's own `DurableObjectState.id` is a hex string, not a friendly
+  name, so the caller resolves using `DurableObjectNamespace.idFromName(_:)`
+  (not an arbitrary string) and the callee hosts itself under `state.id`
+  directly — see `WorkersActorSystem`'s doc comment and the dining
+  philosophers example (`Fork`/`Philosopher` in `HelloWorker`) for the
+  concrete pattern.
 - **Errors (Q4):** the callee's `@RPC` method surfaces
   `executeDistributedTarget`'s `handler.onThrow` as a `JSException`, the
   same path an ordinary `@RPC` method's thrown error already takes; the

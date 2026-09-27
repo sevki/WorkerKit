@@ -178,12 +178,11 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         // so concurrent rounds genuinely contend for them — this is real
         // concurrent distributed-actor traffic against real Durable
         // Objects, not a simulation.
-        let system = WorkersActorSystem(durableObjects: env.durableObject("PHILOSOPHERS"))
-        let philosophers = try (0..<5).map { try Philosopher.resolve(id: "phil-\($0)", using: system) }
+        let table = DiningTable(env: env)
+        let philosophers = try table.philosophers()
         let outcomes = try await withThrowingTaskGroup(of: (Int, String).self) { group in
             for i in 0..<5 {
-                let leftForkID = "fork-\(i)"
-                let rightForkID = "fork-\((i + 1) % 5)"
+                let (leftForkID, rightForkID) = table.forkIDs(for: i)
                 group.addTask {
                     (i, try await philosophers[i].tryEat(leftForkID: leftForkID, rightForkID: rightForkID))
                 }
@@ -201,13 +200,12 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         // Thirty concurrent rounds: proof the resource-ordering protocol
         // never deadlocks and every philosopher keeps making progress
         // (no permanent starvation) under real, repeated contention.
-        let system = WorkersActorSystem(durableObjects: env.durableObject("PHILOSOPHERS"))
-        let philosophers = try (0..<5).map { try Philosopher.resolve(id: "phil-\($0)", using: system) }
+        let table = DiningTable(env: env)
+        let philosophers = try table.philosophers()
         for _ in 0..<30 {
             try await withThrowingTaskGroup(of: Void.self) { group in
                 for i in 0..<5 {
-                    let leftForkID = "fork-\(i)"
-                    let rightForkID = "fork-\((i + 1) % 5)"
+                    let (leftForkID, rightForkID) = table.forkIDs(for: i)
                     group.addTask { _ = try await philosophers[i].tryEat(leftForkID: leftForkID, rightForkID: rightForkID) }
                 }
                 try await group.waitForAll()
@@ -401,24 +399,44 @@ distributed actor Philosopher {
 
         let maxAttempts = 6
         for attempt in 0..<maxAttempts {
-            guard try await first.tryPickUp() else {
-                if attempt + 1 < maxAttempts {
-                    try await Task.sleep(nanoseconds: UInt64.random(in: 1_000_000...8_000_000))
+            // Tracked outside the do block, not inferred from control flow,
+            // so a throw from *any* of these calls (a transient RPC
+            // failure, cancellation) — not just a plain `false` result —
+            // still releases whatever this attempt actually holds instead
+            // of stranding it indefinitely.
+            var firstHeld = false
+            var secondHeld = false
+            do {
+                guard try await first.tryPickUp() else {
+                    if attempt + 1 < maxAttempts {
+                        try await Task.sleep(nanoseconds: UInt64.random(in: 1_000_000...8_000_000))
+                    }
+                    continue
                 }
-                continue
-            }
-            guard try await second.tryPickUp() else {
+                firstHeld = true
+
+                guard try await second.tryPickUp() else {
+                    try await first.putDown()
+                    firstHeld = false
+                    if attempt + 1 < maxAttempts {
+                        try await Task.sleep(nanoseconds: UInt64.random(in: 1_000_000...8_000_000))
+                    }
+                    continue
+                }
+                secondHeld = true
+
+                mealsEaten += 1
+                let meal = mealsEaten
                 try await first.putDown()
-                if attempt + 1 < maxAttempts {
-                    try await Task.sleep(nanoseconds: UInt64.random(in: 1_000_000...8_000_000))
-                }
-                continue
+                firstHeld = false
+                try await second.putDown()
+                secondHeld = false
+                return "ate (meal #\(meal))"
+            } catch {
+                if firstHeld { try? await first.putDown() }
+                if secondHeld { try? await second.putDown() }
+                throw error
             }
-            mealsEaten += 1
-            let meal = mealsEaten
-            try await first.putDown()
-            try await second.putDown()
-            return "ate (meal #\(meal))"
         }
         return "starved this round (\(maxAttempts) attempts, forks \(firstID)/\(secondID) stayed contended)"
     }
@@ -446,6 +464,33 @@ final class PhilosopherObject {
         try await hostSystem.receive(
             identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
         )
+    }
+}
+
+/// Computes the real Durable Object hex ids for the table's five forks and
+/// philosophers up front. `WorkersActorSystem`'s per-Durable-Object-id
+/// routing needs the same canonical id the hosted object assigns itself
+/// (its own `DurableObjectState.id`) — not the friendly `"fork-<n>"`/
+/// `"phil-<n>"` name, which only `idFromName(_:)` can turn into that id.
+struct DiningTable {
+    let philosopherIDs: [String]
+    let forkHexIDs: [String]
+    let philosopherSystem: WorkersActorSystem
+
+    init(env: Env) {
+        let philosophersNamespace = env.durableObject("PHILOSOPHERS")
+        let forksNamespace = env.durableObject("FORKS")
+        philosopherIDs = (0..<5).map { philosophersNamespace.idFromName("phil-\($0)") }
+        forkHexIDs = (0..<5).map { forksNamespace.idFromName("fork-\($0)") }
+        philosopherSystem = WorkersActorSystem(durableObjects: philosophersNamespace)
+    }
+
+    func philosophers() throws -> [Philosopher] {
+        try philosopherIDs.map { try Philosopher.resolve(id: $0, using: philosopherSystem) }
+    }
+
+    func forkIDs(for index: Int) -> (left: String, right: String) {
+        (forkHexIDs[index], forkHexIDs[(index + 1) % 5])
     }
 }
 

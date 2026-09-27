@@ -1,3 +1,4 @@
+import Distributed
 import JavaScriptKit
 import WorkersSwift
 
@@ -117,6 +118,21 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         try await kv.put("bytes", try await req.bytes())
         return Response(status: 200, headers: [], body: try await kv.bytes("bytes") ?? [])
 
+    case (let method, let path) where path.hasPrefix("/distributed/double/"):
+        guard method == "GET" else {
+            return .error("Method Not Allowed", 405)
+        }
+        // distributed actor over Workers RPC: calls this worker's own
+        // Doubler through the SELF binding, via WorkersActorSystem. The
+        // caller never sees a plain RPC method name — the compiler-
+        // generated distributed thunk and executeDistributedTarget resolve
+        // the call end to end. See rfcs/distributed-actor-rpc.md.
+        let n = Int(path.dropFirst("/distributed/double/".count)) ?? 0
+        let callerSystem = WorkersActorSystem(stub: env.service("SELF"))
+        let doubler = try Doubler.resolve(id: "doubler", using: callerSystem)
+        let doubled = try await doubler.double(n)
+        return .ok(String(doubled))
+
     case ("GET", "/no-content"):
         return .empty()
 
@@ -133,6 +149,29 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
 /// worker's default entrypoint.
 @RPC func add(_ a: Int, _ b: Int) -> Int {
     a + b
+}
+
+/// A `distributed actor` reachable over Workers RPC through
+/// `WorkersActorSystem`. See `rfcs/distributed-actor-rpc.md`.
+distributed actor Doubler {
+    typealias ActorSystem = WorkersActorSystem
+
+    distributed func double(_ n: Int) -> Int {
+        n * 2
+    }
+}
+
+/// The callee-side system this worker hosts `Doubler` on, and the one fixed
+/// RPC entry point every `WorkersActorSystem` call arrives through.
+private let distributedSystem = WorkersActorSystem()
+private let doubler: Doubler = {
+    let actor = Doubler(actorSystem: distributedSystem)
+    distributedSystem.host(actor)
+    return actor
+}()
+
+@RPC func __workersSwiftDistributedCall(_ identifier: String, _ arguments: JSValue) async throws -> JSValue {
+    try await distributedSystem.receive(identifier: identifier, arguments: arguments)
 }
 
 /// A Durable Object that counts in its storage.

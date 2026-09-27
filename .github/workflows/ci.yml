@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  swift:
+    name: Swift tests and worker-build
+    runs-on: ubuntu-24.04
+    container: swift:6.3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: swift test
+        run: swift test
+
+      - name: Install the Swift SDK for WebAssembly that matches the toolchain
+        run: |
+          apt-get update -q && apt-get install -y -q --no-install-recommends curl ca-certificates
+          tag=$(swift --version 2>&1 | grep -o 'swift-[0-9.]*-RELEASE' | head -n 1)
+          test -n "$tag"
+          lower=$(echo "$tag" | tr '[:upper:]' '[:lower:]')
+          curl -fsSL -o /tmp/wasm-sdk.artifactbundle.tar.gz \
+            "https://download.swift.org/${lower}/wasm-sdk/${tag}/${tag}_wasm.artifactbundle.tar.gz"
+          swift sdk install /tmp/wasm-sdk.artifactbundle.tar.gz
+          swift sdk list
+
+      # Without --swift-sdk, so the plugin picks the SDK that matches the
+      # toolchain itself.
+      - name: swift package worker-build
+        run: |
+          swift package --allow-writing-to-package-directory worker-build -c release
+          ls -l build/worker
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker
+          path: build/worker
+          if-no-files-found: error
+
+  macos:
+    name: Swift tests (macOS)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select the newest Xcode
+        run: |
+          xcode=$(ls -d /Applications/Xcode_*.app | sort -V | tail -n 1)
+          sudo xcode-select -s "$xcode"
+          swift --version
+
+      - run: swift test
+
+  e2e:
+    name: End-to-end (workerd and celld)
+    needs: swift
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install celld from its release image
+        run: |
+          docker pull ghcr.io/denoland/celld
+          container=$(docker create ghcr.io/denoland/celld)
+          docker cp "$container:/usr/local/bin/celld" /usr/local/bin/celld
+          docker rm "$container"
+          celld --version
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: worker
+          path: build/worker
+
+      - name: Run the Swift worker in workerd and celld
+        env:
+          E2E_RUNTIMES: workerd,celld
+          WORKER_DIR: build/worker
+        run: npm run test:e2e

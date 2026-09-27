@@ -225,18 +225,20 @@ confirmed"). What's left is about actually building option 4:
    3)? The demangling risk that originally made this feel exploratory is
    gone; the remaining cost is a small, self-contained transport (per Q1–4
    above), which changes the tradeoff considerably in favor of building it.
-6. **(New, per Codex's review.)** Generic `distributed func`s: the invocation
-   encoder records a generic call's concrete type arguments separately
-   (`recordGenericSubstitution`), and `executeDistributedTarget` retrieves
-   them the same way (`decodeGenericSubstitutions`) — it can't recover a
-   generic substitution from a serialized argument alone. A wire format that
-   only carries the identifier, actor id, and arguments fails a generic call
-   with `missingGenericSubstitutions`. The v1 implementation (see below)
-   does not send generic substitutions and does not support generic
-   `distributed func`s; this would need its own design (likely encoding each
-   substitution's mangled type name and resolving it back to `Any.Type` on
-   the callee side, which needs its own feasibility check) before generics
-   could work.
+6. ~~**(New, per Codex's review.)** Generic `distributed func`s...~~
+   **Resolved.** Generic `distributed func`s are supported: the same
+   "let the Swift runtime resolve it" approach that makes leaving the method
+   identifier mangled safe also works for generic substitutions.
+   `recordGenericSubstitution` captures each generic parameter's mangled
+   type name via the stdlib's `_mangledTypeName` (the same underscored-but-
+   public mechanism `swift-distributed-actors` uses for this); it crosses
+   the wire alongside the identifier and arguments, and
+   `decodeGenericSubstitutions` resolves each one back to a real `Any.Type`
+   via `_typeByName` on the callee side. Verified by spike first (`Int`/
+   `String`/a custom struct/`Array<Int>` round-tripped through
+   `_mangledTypeName`/`_typeByName` under real workerd on wasm32), then in
+   the real implementation (`Doubler.echo<T: Codable & Sendable>(_:)` in
+   `HelloWorker`, passing against real workerd).
 
 Options 1–3 above are kept for the record but are no longer live
 candidates — see "What's confirmed".
@@ -268,7 +270,7 @@ questions considered:
   `executeDistributedTarget`'s `handler.onThrow` as a `JSException`, the
   same path an ordinary `@RPC` method's thrown error already takes; the
   caller sees whatever `RPCStub.call` throws.
-- **Generics (Q6):** not supported, as above — `recordGenericSubstitution`/
-  `decodeGenericSubstitutions` are no-ops. A generic `distributed func` will
-  fail at the `executeDistributedTarget` call with
-  `missingGenericSubstitutions`.
+- **Generics (Q6):** supported. `recordGenericSubstitution` sends each
+  generic parameter's mangled type name (`_mangledTypeName`);
+  `decodeGenericSubstitutions` resolves it back with `_typeByName` on the
+  callee side.

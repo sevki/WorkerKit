@@ -10,3 +10,7 @@ DerivedData/
 /build
 # The static DocC site, built locally or in CI; see README.md#documentation.
 /docs
+# WorkersSwift is a library; consumers resolve their own dependency
+# versions within the ranges Package.swift states, so this isn't checked
+# in (and CI doesn't rely on one being present).
+/Package.resolved

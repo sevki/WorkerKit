@@ -6,6 +6,9 @@ public final class Context: @unchecked Sendable {
     /// The underlying JavaScript `ctx` object, when the runtime passed one.
     public let jsObject: JSObject?
 
+    /// Wraps the runtime's `ctx` object. `@Event(.fetch)` and
+    /// `@DurableObject` construct this for you; a handler does not call it
+    /// directly.
     public init(_ jsObject: JSObject?) {
         self.jsObject = jsObject
     }

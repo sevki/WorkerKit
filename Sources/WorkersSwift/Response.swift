@@ -3,11 +3,15 @@ import JavaScriptKit
 /// An outgoing HTTP response. It is a Swift value until the handler returns
 /// it; the runtime then turns it into a JavaScript `Response`.
 public struct Response: Sendable {
+    /// The HTTP status code, such as `200`.
     public var status: Int
     /// Header fields in order. A name may appear more than once.
     public var headers: [(name: String, value: String)]
+    /// The response body, as raw bytes.
     public var body: [UInt8]
 
+    /// Creates a response directly. Most handlers instead start from
+    /// ``ok(_:)``, ``text(_:status:)``, ``error(_:_:)`` or ``empty(status:)``.
     public init(status: Int = 200, headers: [(name: String, value: String)] = [], body: [UInt8] = []) {
         self.status = status
         self.headers = headers

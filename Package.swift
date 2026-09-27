@@ -27,6 +27,8 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-syntax.git", "600.0.0"..<"700.0.0"),
         // The Swift counterpart of wasm-bindgen and js-sys.
         .package(url: "https://github.com/swiftwasm/JavaScriptKit.git", from: "0.59.0"),
+        // `swift package generate-documentation` / `swift package --disable-sandbox preview-documentation`.
+        .package(url: "https://github.com/swiftlang/swift-docc-plugin.git", from: "1.4.0"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.

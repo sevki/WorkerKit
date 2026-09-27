@@ -8,3 +8,5 @@ DerivedData/
 .netrc
 /node_modules
 /build
+# The static DocC site, built locally or in CI; see README.md#documentation.
+/docs

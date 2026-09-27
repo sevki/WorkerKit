@@ -5,6 +5,7 @@ public final class Headers: @unchecked Sendable {
     /// The underlying JavaScript `Headers`.
     public let jsObject: JSObject
 
+    /// Wraps a JavaScript `Headers` object, such as `Request.headers`.
     public init(_ jsObject: JSObject) {
         self.jsObject = jsObject
     }

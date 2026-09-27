@@ -170,6 +170,55 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         let result = try await doubler.identify(Dog(name: "Rex", breed: "Labrador"))
         return .ok(result)
 
+    case ("GET", "/dining/round"):
+        // One round of the dining philosophers, run concurrently: five
+        // distributed actor instances (Philosopher, one per Durable Object
+        // id) each try to eat by making distributed calls of their own to
+        // two of five Fork instances. Adjacent philosophers share a fork,
+        // so concurrent rounds genuinely contend for them — this is real
+        // concurrent distributed-actor traffic against real Durable
+        // Objects, not a simulation.
+        let system = WorkersActorSystem(durableObjects: env.durableObject("PHILOSOPHERS"))
+        let philosophers = try (0..<5).map { try Philosopher.resolve(id: "phil-\($0)", using: system) }
+        let outcomes = try await withThrowingTaskGroup(of: (Int, String).self) { group in
+            for i in 0..<5 {
+                let leftForkID = "fork-\(i)"
+                let rightForkID = "fork-\((i + 1) % 5)"
+                group.addTask {
+                    (i, try await philosophers[i].tryEat(leftForkID: leftForkID, rightForkID: rightForkID))
+                }
+            }
+            var results: [Int: String] = [:]
+            for try await (i, outcome) in group {
+                results[i] = outcome
+            }
+            return results
+        }
+        let lines = (0..<5).map { "phil-\($0): \(outcomes[$0] ?? "?")" }
+        return .ok(lines.joined(separator: "\n"))
+
+    case ("GET", "/dining/simulate"):
+        // Thirty concurrent rounds: proof the resource-ordering protocol
+        // never deadlocks and every philosopher keeps making progress
+        // (no permanent starvation) under real, repeated contention.
+        let system = WorkersActorSystem(durableObjects: env.durableObject("PHILOSOPHERS"))
+        let philosophers = try (0..<5).map { try Philosopher.resolve(id: "phil-\($0)", using: system) }
+        for _ in 0..<30 {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for i in 0..<5 {
+                    let leftForkID = "fork-\(i)"
+                    let rightForkID = "fork-\((i + 1) % 5)"
+                    group.addTask { _ = try await philosophers[i].tryEat(leftForkID: leftForkID, rightForkID: rightForkID) }
+                }
+                try await group.waitForAll()
+            }
+        }
+        var totals: [Int] = []
+        for philosopher in philosophers {
+            totals.append(try await philosopher.meals())
+        }
+        return .ok(totals.map(String.init).joined(separator: ","))
+
     case ("GET", "/no-content"):
         return .empty()
 
@@ -268,6 +317,135 @@ final class Dog: Animal, @unchecked Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(breed, forKey: .breed)
         try super.encode(to: container.superEncoder())
+    }
+}
+
+// MARK: - Dining philosophers
+
+/// A fork: one distributed actor instance per Durable Object id, exercising
+/// `WorkersActorSystem`'s per-id routing (`init(durableObjects:)`/
+/// `host(_:as:)`) rather than the one-hosted-actor-per-worker singleton
+/// `Doubler` above uses. `tryPickUp`/`putDown` are a non-blocking try-lock:
+/// a Durable Object's own single-threaded execution makes `held`'s
+/// check-then-set atomic, with no separate locking needed.
+distributed actor Fork {
+    typealias ActorSystem = WorkersActorSystem
+
+    private var held = false
+
+    distributed func tryPickUp() -> Bool {
+        guard !held else { return false }
+        held = true
+        return true
+    }
+
+    distributed func putDown() {
+        held = false
+    }
+}
+
+@DurableObject
+final class ForkObject {
+    let hostSystem: WorkersActorSystem
+    let fork: Fork
+
+    init(state: DurableObjectState, env: Env) {
+        let hostSystem = WorkersActorSystem()
+        self.hostSystem = hostSystem
+        fork = hostSystem.host(state.id) { Fork(actorSystem: $0) }
+    }
+
+    @RPC func __workersSwiftDistributedCall(
+        _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
+    ) async throws -> JSValue {
+        try await hostSystem.receive(
+            identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
+        )
+    }
+}
+
+/// A philosopher: also one distributed actor instance per Durable Object id
+/// (see `Fork`), told which two forks to use on each call rather than
+/// knowing its own seat at construction — a Durable Object's real id (what
+/// `ForkObject`/`PhilosopherObject` assign themselves internally) is an
+/// opaque hex string, not the friendly `"fork-<n>"`/`"phil-<n>"` name a
+/// caller resolves by, so the seating plan has to travel with the call
+/// instead. Always picks up the lower-id fork first (a classic resource-
+/// ordering deadlock avoidance: two neighbors can never each hold the
+/// other's first fork), and releases immediately on a failed second
+/// pickup rather than blocking, so a failed attempt never wedges a fork.
+///
+/// A single attempt isn't enough on its own, though: measured against real
+/// workerd, five concurrent callers with no jitter resolve their pickups in
+/// a *consistent* order every round (nothing here is genuinely racing at
+/// the OS/network level the way real separate processes would), so a
+/// give-up-immediately philosopher starves permanently rather than
+/// occasionally — one philosopher won every single round, 30/30, while the
+/// other four never ate once. `tryEat` retries with random backoff between
+/// attempts specifically to break that determinism.
+distributed actor Philosopher {
+    typealias ActorSystem = WorkersActorSystem
+
+    private let forksSystem: WorkersActorSystem
+    private var mealsEaten = 0
+
+    init(actorSystem: WorkersActorSystem, forksSystem: WorkersActorSystem) {
+        self.actorSystem = actorSystem
+        self.forksSystem = forksSystem
+    }
+
+    distributed func tryEat(leftForkID: String, rightForkID: String) async throws -> String {
+        let (firstID, secondID) = leftForkID < rightForkID ? (leftForkID, rightForkID) : (rightForkID, leftForkID)
+        let first = try Fork.resolve(id: firstID, using: forksSystem)
+        let second = try Fork.resolve(id: secondID, using: forksSystem)
+
+        let maxAttempts = 6
+        for attempt in 0..<maxAttempts {
+            guard try await first.tryPickUp() else {
+                if attempt + 1 < maxAttempts {
+                    try await Task.sleep(nanoseconds: UInt64.random(in: 1_000_000...8_000_000))
+                }
+                continue
+            }
+            guard try await second.tryPickUp() else {
+                try await first.putDown()
+                if attempt + 1 < maxAttempts {
+                    try await Task.sleep(nanoseconds: UInt64.random(in: 1_000_000...8_000_000))
+                }
+                continue
+            }
+            mealsEaten += 1
+            let meal = mealsEaten
+            try await first.putDown()
+            try await second.putDown()
+            return "ate (meal #\(meal))"
+        }
+        return "starved this round (\(maxAttempts) attempts, forks \(firstID)/\(secondID) stayed contended)"
+    }
+
+    distributed func meals() -> Int {
+        mealsEaten
+    }
+}
+
+@DurableObject
+final class PhilosopherObject {
+    let hostSystem: WorkersActorSystem
+    let philosopher: Philosopher
+
+    init(state: DurableObjectState, env: Env) {
+        let hostSystem = WorkersActorSystem()
+        self.hostSystem = hostSystem
+        let forksSystem = WorkersActorSystem(durableObjects: env.durableObject("FORKS"))
+        philosopher = hostSystem.host(state.id) { Philosopher(actorSystem: $0, forksSystem: forksSystem) }
+    }
+
+    @RPC func __workersSwiftDistributedCall(
+        _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
+    ) async throws -> JSValue {
+        try await hostSystem.receive(
+            identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
+        )
     }
 }
 

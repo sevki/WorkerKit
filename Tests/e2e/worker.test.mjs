@@ -32,7 +32,7 @@ for (const runtime of runtimes) {
         "WorkersSwift.wasm": await readFile(join(workerDirectory, "WorkersSwift.wasm")),
       }, "WorkersSwift.wasm", {
         vars: { GREETING: "hello from env" },
-        durableObjects: { COUNTER: "Counter" },
+        durableObjects: { COUNTER: "Counter", FORKS: "ForkObject", PHILOSOPHERS: "PhilosopherObject" },
         kvNamespaces: { KV: "workers-swift-e2e-kv" },
         selfBinding: "SELF",
       });
@@ -197,6 +197,29 @@ for (const runtime of runtimes) {
       assertNotCrashed(result, "/distributed/dog");
       assert.equal(result.response.status, 200);
       assert.equal(result.body, "Rex is a Labrador");
+    });
+
+    test("dining philosophers: one concurrent round never deadlocks", async () => {
+      const result = await request("/dining/round");
+      assertNotCrashed(result, "/dining/round");
+      assert.equal(result.response.status, 200);
+      const lines = result.body.split("\n");
+      assert.equal(lines.length, 5);
+      for (const line of lines) {
+        assert.match(line, /^phil-\d: (ate \(meal #\d+\)|starved this round .*)$/);
+      }
+    });
+
+    test("dining philosophers: 30 concurrent rounds make progress with no deadlock", async () => {
+      const result = await request("/dining/simulate");
+      assertNotCrashed(result, "/dining/simulate");
+      assert.equal(result.response.status, 200);
+      const totals = result.body.split(",").map(Number);
+      assert.equal(totals.length, 5);
+      assert.ok(totals.every((n) => Number.isInteger(n) && n >= 0), `expected 5 non-negative integers, got ${result.body}`);
+      const sum = totals.reduce((a, b) => a + b, 0);
+      assert.ok(sum > 0, `expected some meals to have been eaten across 30 rounds, got ${result.body}`);
+      assert.ok(totals.every((n) => n > 0), `expected every philosopher to eat at least once (no starvation), got ${result.body}`);
     });
 
     test("KV put, getWithMetadata and delete", async () => {

@@ -20,18 +20,25 @@ import JavaScriptKit
 /// that names a type not present in the callee's binary (or stripped from
 /// it) fails to resolve and throws, same as any other decode failure.
 ///
-/// **v1 scope:** exactly one locally-hosted actor per `WorkersActorSystem`
-/// (see ``host(_:)``). There's no `ActorID`-based routing to multiple
-/// instances yet — that's future work if this needs to back, say, one
-/// distributed actor per Durable Object id rather than a singleton.
+/// A `WorkersActorSystem` backs either a **singleton** actor (one instance
+/// per worker, reached through a fixed ``RPCStub``) or **one distributed
+/// actor instance per Durable Object id** (reached through a
+/// `DurableObjectNamespace`, routed by `ActorID`) — see ``host(_:)`` for the
+/// singleton case and ``host(_:as:)`` for the per-id case.
 ///
 /// A system plays one of two roles:
 ///
-///     // Caller side — reaches the actor through a stub, e.g. the worker's
-///     // own SELF service binding, and calls it like any distributed actor:
+///     // Caller side, singleton — reaches the actor through a stub, e.g.
+///     // the worker's own SELF service binding:
 ///     let system = WorkersActorSystem(stub: env.service("SELF"))
 ///     let doubler = try Doubler.resolve(id: "doubler", using: system)
 ///     let result = try await doubler.double(21)
+///
+///     // Caller side, one instance per Durable Object id — reaches
+///     // whichever instance `id` names, routed dynamically per call:
+///     let system = WorkersActorSystem(durableObjects: env.durableObject("FORKS"))
+///     let fork = try Fork.resolve(id: "fork-0", using: system)
+///     let picked = try await fork.tryPickUp()
 ///
 ///     // Callee side — hosts the real instance and exposes the one fixed
 ///     // RPC entry point every WorkersActorSystem call arrives through:
@@ -45,6 +52,10 @@ import JavaScriptKit
 ///             identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
 ///         )
 ///     }
+///
+/// For the per-Durable-Object-id case, the callee is a `@DurableObject`
+/// itself and hosts an actor whose id is the object's own id — see
+/// ``host(_:as:)``.
 public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendable {
     public typealias ActorID = String
     public typealias SerializationRequirement = Codable
@@ -57,27 +68,70 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
     /// with this name per worker that hosts a distributed actor.
     public static let entryPointName = "__workersSwiftDistributedCall"
 
-    private let stub: RPCStub?
+    /// How a caller-side system reaches a remote actor: either always the
+    /// same stub (the singleton case), or a `DurableObjectNamespace` stub
+    /// looked up by the target actor's own id (one instance per id).
+    private enum Transport {
+        case fixed(RPCStub)
+        case perID(DurableObjectNamespace)
+    }
+
+    private let transport: Transport?
     private var localActor: (any DistributedActor)?
 
-    /// A caller-side system: every actor resolved against it is remote,
-    /// reached through `stub`.
+    /// Set immediately before constructing a locally-hosted actor whose id
+    /// should be something specific (typically a Durable Object's own id)
+    /// rather than the type-name default `assignID` otherwise falls back
+    /// to. See ``host(_:as:)``.
+    private var nextAssignedID: ActorID?
+
+    /// A caller-side system backing a singleton actor: every actor resolved
+    /// against it is remote, reached through `stub`, regardless of its id.
     public init(stub: RPCStub) {
-        self.stub = stub
+        self.transport = .fixed(stub)
+    }
+
+    /// A caller-side system backing one distributed actor instance per
+    /// Durable Object id: a resolved actor's calls are routed to the
+    /// Durable Object named by its own `id`.
+    public init(durableObjects: DurableObjectNamespace) {
+        self.transport = .perID(durableObjects)
     }
 
     /// A callee-side system: never originates a call itself. Register the
-    /// actor it hosts with ``host(_:)``, then forward
+    /// actor it hosts with ``host(_:)`` or ``host(_:as:)``, then forward
     /// ``WorkersActorSystem/entryPointName``'s `@RPC` method to
     /// ``receive(identifier:arguments:genericSubstitutions:)``.
     public init() {
-        self.stub = nil
+        self.transport = nil
     }
 
-    /// Registers `actor` as this system's one locally-hosted distributed
-    /// actor: what `receive(identifier:arguments:genericSubstitutions:)` runs a call against.
+    /// Registers `actor` as this system's one locally-hosted singleton
+    /// distributed actor: what `receive(identifier:arguments:genericSubstitutions:)`
+    /// runs a call against. Pairs with the caller-side `init(stub:)`.
     public func host<Act: DistributedActor>(_ actor: Act) where Act.ActorSystem == WorkersActorSystem {
         localActor = actor
+    }
+
+    /// Constructs and registers this system's one locally-hosted distributed
+    /// actor with the explicit id `id` — typically a Durable Object's own
+    /// id, so the actor's identity matches the object hosting it. Pairs with
+    /// the caller-side `init(durableObjects:)`.
+    ///
+    /// `actorType`'s local initializer must not be the compiler-synthesized
+    /// default; it must accept `actorSystem:` (as every `distributed actor`
+    /// does) and otherwise construct the actor however it needs to — this
+    /// method only arranges for the *id* that initializer's implicit
+    /// `assignID` call receives.
+    @discardableResult
+    public func host<Act: DistributedActor>(
+        _ id: ActorID,
+        as make: (WorkersActorSystem) -> Act
+    ) -> Act where Act.ActorSystem == WorkersActorSystem {
+        nextAssignedID = id
+        let actor = make(self)
+        localActor = actor
+        return actor
     }
 
     /// The callee side of a call: decodes `arguments`, resolves `identifier`
@@ -122,9 +176,14 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
 
     public func assignID<Act>(_ actorType: Act.Type) -> ActorID
     where Act: DistributedActor, Act.ID == ActorID {
-        // v1: one hosted instance per WorkersActorSystem (see `host(_:)`),
-        // so the id only needs to be stable, not globally unique.
-        "\(actorType)"
+        if let id = nextAssignedID {
+            nextAssignedID = nil
+            return id
+        }
+        // The singleton case (see `host(_:)`): one hosted instance per
+        // WorkersActorSystem, so the id only needs to be stable, not
+        // globally unique.
+        return "\(actorType)"
     }
 
     public func actorReady<Act>(_ actor: Act)
@@ -144,7 +203,7 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
         returning: Res.Type
     ) async throws -> Res
     where Act: DistributedActor, Act.ID == ActorID, Err: Error, Res: SerializationRequirement {
-        let value = try await send(target: target, invocation: invocation)
+        let value = try await send(id: actor.id, target: target, invocation: invocation)
         return try JSValueDecoder().decode(Res.self, from: value)
     }
 
@@ -155,12 +214,17 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
         throwing: Err.Type
     ) async throws
     where Act: DistributedActor, Act.ID == ActorID, Err: Error {
-        _ = try await send(target: target, invocation: invocation)
+        _ = try await send(id: actor.id, target: target, invocation: invocation)
     }
 
-    private func send(target: RemoteCallTarget, invocation: InvocationEncoder) async throws -> JSValue {
-        guard let stub else {
-            throw JSException(message: "WorkersActorSystem has no RPCStub to send \(target.identifier) through")
+    private func send(id: ActorID, target: RemoteCallTarget, invocation: InvocationEncoder) async throws -> JSValue {
+        guard let transport else {
+            throw JSException(message: "WorkersActorSystem has no transport to send \(target.identifier) through")
+        }
+        let stub: RPCStub
+        switch transport {
+        case .fixed(let fixedStub): stub = fixedStub
+        case .perID(let namespace): stub = namespace.get(named: id)
         }
         let arguments = JSObject.global.Array.object!.new()
         for value in invocation.recorded {

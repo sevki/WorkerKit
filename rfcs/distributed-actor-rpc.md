@@ -225,6 +225,50 @@ confirmed"). What's left is about actually building option 4:
    3)? The demangling risk that originally made this feel exploratory is
    gone; the remaining cost is a small, self-contained transport (per Q1–4
    above), which changes the tradeoff considerably in favor of building it.
+6. **(New, per Codex's review.)** Generic `distributed func`s: the invocation
+   encoder records a generic call's concrete type arguments separately
+   (`recordGenericSubstitution`), and `executeDistributedTarget` retrieves
+   them the same way (`decodeGenericSubstitutions`) — it can't recover a
+   generic substitution from a serialized argument alone. A wire format that
+   only carries the identifier, actor id, and arguments fails a generic call
+   with `missingGenericSubstitutions`. The v1 implementation (see below)
+   does not send generic substitutions and does not support generic
+   `distributed func`s; this would need its own design (likely encoding each
+   substitution's mangled type name and resolving it back to `Any.Type` on
+   the callee side, which needs its own feasibility check) before generics
+   could work.
 
 Options 1–3 above are kept for the record but are no longer live
 candidates — see "What's confirmed".
+
+## Implementation status
+
+A v1 `WorkersActorSystem` is in progress (see the PR stacked on this one).
+It answers Q1–4 above concretely, all scoped down from what those
+questions considered:
+
+- **Wire format (Q1):** no JSON. Each argument is encoded straight to a
+  `JSValue` with a new `JSValueEncoder` (the `Encodable` counterpart to
+  JavaScriptKit's existing `JSValueDecoder`), and the caller sends
+  `(target.identifier, [JSValue])` as real RPC arguments — Workers RPC
+  structured-clones them across the boundary itself, so there's no text
+  serialization step at all.
+- **Fixed RPC method (Q2):** no `worker-build` involvement. The one fixed
+  entry point is a plain top-level `@RPC` function
+  (`__workersSwiftDistributedCall`), reusing 100% of the existing `@RPC`
+  macro/dispatch machinery instead of adding a new export kind.
+- **Actor routing (Q3):** resolved to the narrowest useful case for v1 —
+  exactly one hosted actor instance per `WorkersActorSystem`
+  (`WorkersActorSystem.host(_:)`), i.e. a singleton, mirroring how a
+  top-level `@RPC` function is already "one instance of the default
+  `WorkerEntrypoint` per request". `ActorID`-based routing to multiple
+  instances (e.g. one per Durable Object id) is explicitly future work, not
+  attempted here.
+- **Errors (Q4):** the callee's `@RPC` method surfaces
+  `executeDistributedTarget`'s `handler.onThrow` as a `JSException`, the
+  same path an ordinary `@RPC` method's thrown error already takes; the
+  caller sees whatever `RPCStub.call` throws.
+- **Generics (Q6):** not supported, as above — `recordGenericSubstitution`/
+  `decodeGenericSubstitutions` are no-ops. A generic `distributed func` will
+  fail at the `executeDistributedTarget` call with
+  `missingGenericSubstitutions`.

@@ -45,6 +45,8 @@ public final class KVStore: @unchecked Sendable {
     /// Stores `value` under `key`.
     ///
     /// - Parameters:
+    ///   - key: the key to store the value under.
+    ///   - value: the text to store.
     ///   - expiration: when the key expires, in seconds since the Unix epoch.
     ///   - expirationTtl: how long the key lives, in seconds (at least 60).
     ///   - metadata: a JSON-serializable value stored with the key, such as

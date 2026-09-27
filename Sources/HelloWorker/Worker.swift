@@ -171,7 +171,12 @@ private let doubler: Doubler = {
 }()
 
 @RPC func __workersSwiftDistributedCall(_ identifier: String, _ arguments: JSValue) async throws -> JSValue {
-    try await distributedSystem.receive(identifier: identifier, arguments: arguments)
+    // A top-level `let` initializes lazily, on first access — and nothing
+    // else in this file touches the module-level `doubler`, so without this
+    // its initializer (which hosts it on `distributedSystem`) would never
+    // run before a call arrives here.
+    _ = doubler
+    return try await distributedSystem.receive(identifier: identifier, arguments: arguments)
 }
 
 /// A Durable Object that counts in its storage.

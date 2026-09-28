@@ -146,10 +146,12 @@ jobs:
     # after. Not gated behind CLOUDFLARE_DEPLOY_ENABLED, since it can't
     # deploy anything - only gated on the token secret actually existing,
     # so this doesn't fail every PR before Cloudflare credentials exist.
-    # (The `secrets` context isn't available in a job-level `if:` - only
-    # `github`, `needs`, `vars` and `inputs` are - so the check has to be
-    # a step-level `if:` on the wrangler-action step instead.)
+    # (`secrets` isn't available in a job- or step-level `if:` at all -
+    # only in `with:`/`env:` - so route the presence check through a job
+    # env var, which `if:` can read.)
     runs-on: ubuntu-24.04
+    env:
+      HAS_CLOUDFLARE_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -159,7 +161,7 @@ jobs:
           path: build/worker
 
       - uses: cloudflare/wrangler-action@v3
-        if: secrets.CLOUDFLARE_API_TOKEN != ''
+        if: env.HAS_CLOUDFLARE_TOKEN == 'true'
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

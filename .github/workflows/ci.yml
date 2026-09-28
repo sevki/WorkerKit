@@ -154,3 +154,8 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # wrangler-action's own default (3.90.0) predates wrangler.jsonc
+          # support and silently finds no config at all ("Missing
+          # entry-point", since it never sees `main`) - pin the version
+          # actually validated locally (`wrangler deploy --dry-run`).
+          wranglerVersion: "4"

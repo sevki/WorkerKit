@@ -1,4 +1,8 @@
-#if !arch(wasm32)
+// Matches exactly the platforms Package.swift declares WSClient/Logging
+// dependencies for (.macOS, .linux) - not every non-wasm architecture:
+// `#if !arch(wasm32)` would also be true on, say, iOS, where those two
+// imports don't exist as dependencies at all and fail to resolve.
+#if os(macOS) || os(Linux)
 import Distributed
 import Foundation
 import Logging

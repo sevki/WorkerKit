@@ -8,6 +8,10 @@
 // own esbuild bundler reprocess them: this is the exact artifact already
 // tested against real workerd, unchanged.
 //
+// `name` must match the Worker's actual name in the Cloudflare dashboard
+// exactly - wrangler uses it to decide which Worker a deploy updates, and
+// this one was created there as "swift" (see workers/services/view/swift).
+//
 // One binding needs a value only Cloudflare can hand out and isn't
 // filled in here yet: `kv_namespaces[0].id`, from a real KV namespace.
 // Until that's created (`wrangler kv namespace create workers-swift-example-KV`)
@@ -15,7 +19,7 @@
 // and /kv-bytes will 500, everything else (/, /dining/*, /distributed/*,
 // /counter/*, /rpc/add) works.
 {
-	"name": "workers-swift-example",
+	"name": "swift",
 	"main": "build/worker/worker.mjs",
 	"no_bundle": true,
 	"compatibility_date": "2026-01-01",
@@ -33,6 +37,6 @@
 		{ "tag": "v1", "new_sqlite_classes": ["Counter", "ForkObject", "PhilosopherObject"] }
 	],
 	"services": [
-		{ "binding": "SELF", "service": "workers-swift-example" }
+		{ "binding": "SELF", "service": "swift" }
 	]
 }

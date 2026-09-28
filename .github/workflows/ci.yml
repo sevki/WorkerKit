@@ -42,8 +42,15 @@ jobs:
       # into that build regardless of --product scoping, so that route is
       # blocked for now. Instead, bundle the runtime .so's this binary
       # needs and point the e2e job at them with LD_LIBRARY_PATH.
+      #
+      # --build-system native: SwiftPM 6.4 defaults to the new `swiftbuild`
+      # backend, which segfaults during planning on Linux - a known,
+      # already-filed libdispatch use-after-free in DispatchIO's epoll
+      # handling (swiftlang/swift-build#1786, root cause in
+      # swiftlang/swift-corelibs-libdispatch#949), not anything in this
+      # package. Force the older backend to avoid it.
       - name: swift build HelloWorkerCLI
-        run: swift build --product HelloWorkerCLI
+        run: swift build --product HelloWorkerCLI --build-system native
 
       - uses: actions/upload-artifact@v4
         with:

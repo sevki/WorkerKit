@@ -105,6 +105,13 @@ public final class DurableObjectState: @unchecked Sendable {
         let result = tag.map { jsObject.getWebSockets!($0) } ?? jsObject.getWebSockets!()
         return JSArray(result.object!)?.compactMap { $0.object }.map(WebSocket.init) ?? []
     }
+
+    /// The tags `ws` was accepted with — a hibernatable `WebSocket` doesn't
+    /// carry its own tags (there's no `tags` property on the runtime's
+    /// WebSocket object); the hosting object's state looks them up instead.
+    public func getTags(_ ws: WebSocket) -> [String] {
+        JSArray(jsObject.getTags!(ws.jsObject).object!)?.compactMap(\.string) ?? []
+    }
 }
 
 /// A message received in `DurableObject.webSocketMessage(_:_:)`.
@@ -150,11 +157,6 @@ public final class WebSocket: @unchecked Sendable {
     /// Closes the connection.
     public func close(code: Int = 1000, reason: String = "") {
         _ = jsObject.close!(code, reason)
-    }
-
-    /// The tags this WebSocket was accepted with.
-    public var tags: [String] {
-        JSArray(jsObject.tags.object!)?.compactMap(\.string) ?? []
     }
 
     /// Stores `value` on this WebSocket so it survives hibernation, readable

@@ -35,6 +35,14 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
     private struct State {
         var pending: [String: CheckedContinuation<RemoteReply, Error>] = [:]
         var nextCallID = 0
+        /// Set once the connection ends, however it ends — a thrown error,
+        /// or `group.next()` returning normally (the outgoing stream
+        /// finishing because of `close()`, or the server closing cleanly).
+        /// `send(identifier:invocation:)` checks this before registering a
+        /// new pending call, so a call made after termination fails
+        /// immediately instead of waiting on a continuation nothing will
+        /// ever resume.
+        var terminationError: Error?
     }
 
     /// Opens a WebSocket to the `RPCGateway` of the worker at `worker` (its
@@ -59,6 +67,7 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
 
         let state = self.state
         connectionTask = Task {
+            let terminationError: Error
             do {
                 _ = try await WebSocketClient.connect(url: url, logger: logger) { inbound, outbound, _ in
                     try await withThrowingTaskGroup(of: Void.self) { group in
@@ -80,20 +89,25 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
                         // Either side finishing (outgoing closed by close(),
                         // or the server closing the connection) ends the
                         // whole call, which is what makes WebSocketClient
-                        // perform the closing handshake.
+                        // perform the closing handshake. Neither is an
+                        // error, so `group.next()` returns normally here —
+                        // the pending-call drain below still has to run.
                         try await group.next()
                         group.cancelAll()
                     }
                 }
+                terminationError = RemoteCallError(message: "WorkersActorSystem: connection closed")
             } catch {
-                let waiting = state.withLock {
-                    let pending = $0.pending
-                    $0.pending.removeAll()
-                    return pending
-                }
-                for pendingContinuation in waiting.values {
-                    pendingContinuation.resume(throwing: error)
-                }
+                terminationError = error
+            }
+            let waiting = state.withLock { state in
+                let pending = state.pending
+                state.pending.removeAll()
+                state.terminationError = terminationError
+                return pending
+            }
+            for pendingContinuation in waiting.values {
+                pendingContinuation.resume(throwing: terminationError)
             }
         }
     }
@@ -123,7 +137,17 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
             arguments: invocation.recorded, genericSubstitutions: invocation.genericSubstitutions
         )
         return try await withCheckedThrowingContinuation { continuation in
-            state.withLock { $0.pending[id] = continuation }
+            let terminationError: Error? = state.withLock { state in
+                if let terminationError = state.terminationError {
+                    return terminationError
+                }
+                state.pending[id] = continuation
+                return nil
+            }
+            if let terminationError {
+                continuation.resume(throwing: terminationError)
+                return
+            }
             do {
                 let data = try call.jsonData()
                 outgoingContinuation.yield(String(decoding: data, as: UTF8.self))

@@ -27,9 +27,9 @@ public macro Event(_ event: WorkerEvent) = #externalMacro(module: "WorkersSwiftM
 ///     "durable_objects": { "bindings": [{ "name": "COUNTER", "class_name": "Counter" }] }
 ///
 /// If the class declares exactly one property of type `WorkersActorSystem`,
-/// this also generates the `@RPC __workersSwiftDistributedCall` forwarder
-/// that hosts a distributed actor through it, so a Durable Object that
-/// hosts one needs only:
+/// this also generates the `__workersSwiftDistributedCall` forwarder that
+/// hosts a distributed actor through it, so a Durable Object that hosts one
+/// needs only:
 ///
 ///     @DurableObject
 ///     final class CounterObject {

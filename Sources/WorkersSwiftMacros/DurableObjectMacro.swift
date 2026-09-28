@@ -133,6 +133,14 @@ private func distributedHostPropertyName(in classDecl: ClassDeclSyntax) -> Strin
 /// `WorkersActorSystem` property (see `distributedHostPropertyName(in:)`),
 /// or `nil` if the class doesn't have exactly one such property or already
 /// declares the method itself.
+///
+/// Deliberately has no `@RPC` attribute of its own: the peer macro
+/// expansion below adds it to `rpcMethods` directly, and a member macro's
+/// synthesized declaration doesn't get the right `lexicalContext` if one of
+/// its own attributes is itself a macro — the compiler re-expands `@RPC` on
+/// it as if it were a top-level function (wrong `@_cdecl` target, spurious
+/// Sendable/capture errors), not as a method of the class it's actually a
+/// member of.
 private func synthesizedDistributedCallMethod(in classDecl: ClassDeclSyntax) -> FunctionDeclSyntax? {
     let alreadyDeclared = classDecl.memberBlock.members.contains {
         $0.decl.as(FunctionDeclSyntax.self)?.name.text == WorkersActorSystemEntryPointName
@@ -141,7 +149,7 @@ private func synthesizedDistributedCallMethod(in classDecl: ClassDeclSyntax) -> 
         return nil
     }
     let source: DeclSyntax = """
-        @RPC func \(raw: WorkersActorSystemEntryPointName)(
+        func \(raw: WorkersActorSystemEntryPointName)(
             _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
         ) async throws -> JSValue {
             try await \(raw: hostProperty).receive(

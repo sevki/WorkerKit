@@ -31,6 +31,12 @@ The method must be named exactly ``WorkersActorSystem/entryPointName``
 (`__workersSwiftDistributedCall`) — `worker-build` finds it the same way it
 finds any other ``RPC()`` method, through the Wasm export it generates.
 
+A ``DurableObject()`` class that declares exactly one `WorkersActorSystem`
+property gets this forwarder generated for free — see the per-Durable-Object-
+id case below. Writing it out by hand, as here, is only needed for the
+singleton case (a top-level function, not a `@DurableObject` class body) or
+when a class hosts more than one `WorkersActorSystem`.
+
 ## One singleton actor per worker
 
 The simplest case: one actor instance, shared by the whole worker, reached
@@ -107,16 +113,16 @@ final class CounterObject {
         self.hostSystem = hostSystem
         counter = hostSystem.host(state.id) { Counter(actorSystem: $0) }
     }
-
-    @RPC func __workersSwiftDistributedCall(
-        _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
-    ) async throws -> JSValue {
-        try await hostSystem.receive(
-            identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
-        )
-    }
 }
+```
 
+`@DurableObject` sees the `hostSystem` property above and generates the
+`__workersSwiftDistributedCall` forwarder itself — write it out by hand only
+when the class hosts more than one `WorkersActorSystem` (unambiguous
+otherwise, so the macro leaves it alone whenever there's more than one to
+choose from).
+
+```swift
 // Caller side:
 let namespace = env.durableObject("COUNTERS")
 let system = WorkersActorSystem(durableObjects: namespace)

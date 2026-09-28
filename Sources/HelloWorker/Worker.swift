@@ -352,14 +352,6 @@ final class ForkObject {
         self.hostSystem = hostSystem
         fork = hostSystem.host(state.id) { Fork(actorSystem: $0) }
     }
-
-    @RPC func __workersSwiftDistributedCall(
-        _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
-    ) async throws -> JSValue {
-        try await hostSystem.receive(
-            identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
-        )
-    }
 }
 
 /// A philosopher: also one distributed actor instance per Durable Object id
@@ -456,14 +448,6 @@ final class PhilosopherObject {
         self.hostSystem = hostSystem
         let forksSystem = WorkersActorSystem(durableObjects: env.durableObject("FORKS"))
         philosopher = hostSystem.host(state.id) { Philosopher(actorSystem: $0, forksSystem: forksSystem) }
-    }
-
-    @RPC func __workersSwiftDistributedCall(
-        _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
-    ) async throws -> JSValue {
-        try await hostSystem.receive(
-            identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
-        )
     }
 }
 

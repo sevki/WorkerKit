@@ -450,6 +450,156 @@ final class EventMacroTests: XCTestCase {
         )
     }
 
+    func testDurableObjectSynthesizesDistributedCallForwarder() {
+        assertMacroExpansion(
+            """
+            @DurableObject
+            final class CounterObject {
+                let hostSystem: WorkersActorSystem
+                let counter: Counter
+
+                init(state: DurableObjectState, env: Env) {
+                    let hostSystem = WorkersActorSystem()
+                    self.hostSystem = hostSystem
+                    counter = hostSystem.host(state.id) { Counter(actorSystem: $0) }
+                }
+            }
+            """,
+            expandedSource: """
+            final class CounterObject {
+                let hostSystem: WorkersActorSystem
+                let counter: Counter
+
+                init(state: DurableObjectState, env: Env) {
+                    let hostSystem = WorkersActorSystem()
+                    self.hostSystem = hostSystem
+                    counter = hostSystem.host(state.id) { Counter(actorSystem: $0) }
+                }
+
+                func __workersSwiftDistributedCall(
+                    _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
+                ) async throws -> JSValue {
+                    try await hostSystem.receive(
+                        identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
+                    )
+                }
+            }
+
+            #if arch(wasm32)
+            @_expose(wasm, "workers_do:CounterObject:__workersSwiftDistributedCall")
+            #endif
+            @_cdecl("__workersSwift_do_CounterObject")
+            public func __workersSwift_do_CounterObject() {
+                WorkersRuntime.registerDurableObject(CounterObject.self, name: "CounterObject", rpc: [
+                    "__workersSwiftDistributedCall": { object, arguments in
+                                    return try await object.__workersSwiftDistributedCall(WorkersRuntime.rpcArgument(arguments, 0, as: String.self), WorkersRuntime.rpcArgument(arguments, 1, as: JSValue.self), WorkersRuntime.rpcArgument(arguments, 2, as: [String].self)).jsValue
+                                },
+                ])
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    func testDurableObjectSkipsForwarderWithoutActorSystemProperty() {
+        assertMacroExpansion(
+            """
+            @DurableObject
+            final class Plain {
+                init(state: DurableObjectState, env: Env) {
+                }
+            }
+            """,
+            expandedSource: """
+            final class Plain {
+                init(state: DurableObjectState, env: Env) {
+                }
+            }
+
+            #if arch(wasm32)
+            @_expose(wasm, "workers_do:Plain")
+            #endif
+            @_cdecl("__workersSwift_do_Plain")
+            public func __workersSwift_do_Plain() {
+                WorkersRuntime.registerDurableObject(Plain.self, name: "Plain", rpc: [:])
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    func testDurableObjectSkipsForwarderWithAmbiguousActorSystemProperties() {
+        assertMacroExpansion(
+            """
+            @DurableObject
+            final class TwoSystems {
+                let hostSystem: WorkersActorSystem
+                let otherSystem: WorkersActorSystem
+            }
+            """,
+            expandedSource: """
+            final class TwoSystems {
+                let hostSystem: WorkersActorSystem
+                let otherSystem: WorkersActorSystem
+            }
+
+            #if arch(wasm32)
+            @_expose(wasm, "workers_do:TwoSystems")
+            #endif
+            @_cdecl("__workersSwift_do_TwoSystems")
+            public func __workersSwift_do_TwoSystems() {
+                WorkersRuntime.registerDurableObject(TwoSystems.self, name: "TwoSystems", rpc: [:])
+            }
+            """,
+            macros: macros
+        )
+    }
+
+    func testDurableObjectDoesNotDuplicateHandWrittenForwarder() {
+        assertMacroExpansion(
+            """
+            @DurableObject
+            final class CounterObject {
+                let hostSystem: WorkersActorSystem
+
+                @RPC func __workersSwiftDistributedCall(
+                    _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
+                ) async throws -> JSValue {
+                    try await hostSystem.receive(
+                        identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
+                    )
+                }
+            }
+            """,
+            expandedSource: """
+            final class CounterObject {
+                let hostSystem: WorkersActorSystem
+
+                func __workersSwiftDistributedCall(
+                    _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
+                ) async throws -> JSValue {
+                    try await hostSystem.receive(
+                        identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
+                    )
+                }
+            }
+
+            #if arch(wasm32)
+            @_expose(wasm, "workers_do:CounterObject:__workersSwiftDistributedCall")
+            #endif
+            @_cdecl("__workersSwift_do_CounterObject")
+            public func __workersSwift_do_CounterObject() {
+                WorkersRuntime.registerDurableObject(CounterObject.self, name: "CounterObject", rpc: [
+                    "__workersSwiftDistributedCall": { object, arguments in
+                                    return try await object.__workersSwiftDistributedCall(WorkersRuntime.rpcArgument(arguments, 0, as: String.self), WorkersRuntime.rpcArgument(arguments, 1, as: JSValue.self), WorkersRuntime.rpcArgument(arguments, 2, as: [String].self)).jsValue
+                                },
+                ])
+            }
+            """,
+            macros: macros
+        )
+    }
+
     func testTopLevelRPCRejectsDefaultArguments() {
         assertMacroExpansion(
             """

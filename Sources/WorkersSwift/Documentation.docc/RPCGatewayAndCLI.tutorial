@@ -133,8 +133,9 @@
 
         @Steps {
             @Step {
-                Build the worker into a Wasm module and JavaScript shim
-                with `swift package worker-build -c release`.
+                Build the worker into a Wasm module and JavaScript shim.
+                `--product` picks `GreeterWorkerWasm` out of the two
+                executables the package now defines.
 
                 @Code(name: "Terminal", file: "09-run-build.sh")
             }

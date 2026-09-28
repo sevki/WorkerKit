@@ -29,34 +29,30 @@ jobs:
       # daemon for celld, which a container job doesn't get) with no
       # Swift runtime installed - a dynamically-linked binary fails there
       # with "error while loading shared libraries: libswiftDistributed.so".
-      # A plain --static-swift-stdlib doesn't work around this either: it
-      # fails to link against this image's glibc-based Foundation with
-      # undefined ICU references. The Static Linux SDK (musl-based) is
-      # Swift's actual supported answer to both - a fully static binary,
-      # no runtime .so's, no libc even:
-      # https://www.swift.org/documentation/articles/static-linux-getting-started.html
-      - name: Install the Static Linux SDK
-        run: |
-          swift sdk install \
-            https://download.swift.org/swift-6.4.0-release/static-sdk/swift-6.4.0-RELEASE/swift-6.4.0-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz \
-            --checksum 47d2fd89eebfdf9eb4d536b6710414297f755c17926cdebc4742c08982b40a9e
-          swift sdk list
-
-      - name: swift build HelloWorkerCLI (static)
-        run: |
-          # --show-bin-path only prints the path and exits - it doesn't
-          # build - so this needs its own build invocation first, with
-          # identical flags to the --show-bin-path query below.
-          swift build --swift-sdk x86_64-swift-linux-musl --product HelloWorkerCLI -c release
-          bin=$(swift build --swift-sdk x86_64-swift-linux-musl --product HelloWorkerCLI -c release --show-bin-path)
-          echo "HELLO_WORKER_CLI_BIN=$bin/HelloWorkerCLI" >> "$GITHUB_ENV"
-          ls -l "$bin/HelloWorkerCLI"
-          ldd "$bin/HelloWorkerCLI" || true
+      # The Static Linux SDK (musl-based) would avoid this with a fully
+      # static binary, but JavaScriptKit 0.59.0 (pinned) has no Musl
+      # support in ThreadLocal.swift and gets pulled into that build
+      # regardless of --product scoping, so that route is blocked for
+      # now. Instead, bundle the runtime .so's this binary needs and
+      # point the e2e job at them with LD_LIBRARY_PATH.
+      - name: swift build HelloWorkerCLI
+        run: swift build --product HelloWorkerCLI
 
       - uses: actions/upload-artifact@v4
         with:
           name: hello-worker-cli
-          path: ${{ env.HELLO_WORKER_CLI_BIN }}
+          path: .build/debug/HelloWorkerCLI
+          if-no-files-found: error
+
+      - name: Bundle the Swift runtime for the e2e job's Docker-only, no-Swift runner
+        run: |
+          mkdir -p swift-runtime-libs
+          cp /usr/lib/swift/linux/*.so swift-runtime-libs/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swift-runtime-libs
+          path: swift-runtime-libs
           if-no-files-found: error
 
       - name: Install the Swift SDK for WebAssembly that matches the toolchain
@@ -169,20 +165,27 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: hello-worker-cli
-          path: build/hello-worker-cli
+          path: .build/debug
 
-      # Statically linked (the swift job builds it with the Static Linux
-      # SDK) specifically so it runs here: this runner has no Swift
-      # toolchain at all, since it needs direct access to the host's
-      # Docker daemon for celld, which the swift:6.4 container job
-      # doesn't get.
-      - run: chmod +x build/hello-worker-cli/HelloWorkerCLI
+      - uses: actions/download-artifact@v4
+        with:
+          name: swift-runtime-libs
+          path: swift-runtime-libs
+
+      # This runner has no Swift toolchain at all (it needs direct access
+      # to the host's Docker daemon for celld, which the swift:6.4
+      # container job doesn't get), so HelloWorkerCLI is dynamically
+      # linked against the runtime .so's bundled above via
+      # LD_LIBRARY_PATH. Artifact transport also strips the executable
+      # bit, hence the chmod.
+      - run: chmod +x .build/debug/HelloWorkerCLI
 
       - name: Run the Swift worker in workerd and celld
         env:
           E2E_RUNTIMES: workerd,celld
           WORKER_DIR: build/worker
-          HELLO_CLI: build/hello-worker-cli/HelloWorkerCLI
+          HELLO_CLI: .build/debug/HelloWorkerCLI
+          LD_LIBRARY_PATH: ${{ github.workspace }}/swift-runtime-libs
         run: npm run test:e2e
 
   deploy-dry-run:

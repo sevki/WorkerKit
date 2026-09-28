@@ -8,6 +8,8 @@ DerivedData/
 .netrc
 /node_modules
 /build
+# `wrangler dev`'s local state.
+/.wrangler
 # The static DocC site, built locally or in CI; see README.md#documentation.
 /docs
 # WorkersSwift is a library; consumers resolve their own dependency

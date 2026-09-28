@@ -29,6 +29,23 @@ public protocol DurableObject: AnyObject {
 
     /// Runs when an alarm set with `storage.setAlarm` fires.
     func alarm() async throws
+
+    /// Runs when a WebSocket accepted with
+    /// `DurableObjectState.acceptWebSocket(tags:)` receives `message`,
+    /// including after the object was evicted and hibernated between
+    /// messages.
+    func webSocketMessage(_ ws: WebSocket, _ message: WebSocketMessage) async throws
+
+    /// Runs when a WebSocket accepted with
+    /// `DurableObjectState.acceptWebSocket(tags:)` receives a close frame.
+    /// The runtime does not complete the closing handshake on its own —
+    /// call `ws.close(code:reason:)` here, or the client's own `close()`
+    /// hangs until it times out.
+    func webSocketClose(_ ws: WebSocket, code: Int, reason: String, wasClean: Bool) async throws
+
+    /// Runs when a WebSocket accepted with
+    /// `DurableObjectState.acceptWebSocket(tags:)` errors.
+    func webSocketError(_ ws: WebSocket, _ error: JSException) async throws
 }
 
 extension DurableObject {
@@ -37,6 +54,12 @@ extension DurableObject {
     }
 
     public func alarm() async throws {}
+
+    public func webSocketMessage(_ ws: WebSocket, _ message: WebSocketMessage) async throws {}
+
+    public func webSocketClose(_ ws: WebSocket, code: Int, reason: String, wasClean: Bool) async throws {}
+
+    public func webSocketError(_ ws: WebSocket, _ error: JSException) async throws {}
 }
 
 /// The Durable Object's state: the runtime's `ctx` object.
@@ -57,6 +80,96 @@ public final class DurableObjectState: @unchecked Sendable {
     public var storage: DurableObjectStorage {
         DurableObjectStorage(jsObject.storage.object!)
     }
+
+    /// Creates a WebSocket pair and accepts the server end for hibernation:
+    /// the runtime may evict this object between messages and recreate it on
+    /// the next one, calling `DurableObject.webSocketMessage(_:_:)` etc. as
+    /// if it had never left. Returns the client end — hand it to
+    /// `Response.webSocketUpgrade(_:)` to complete the upgrade.
+    public func acceptWebSocket(tags: [String] = []) -> WebSocket {
+        let pair = JSObject.global.WebSocketPair.function!.new()
+        let client = pair[0].object!
+        let server = pair[1].object!
+        let tagArray = JSObject.global.Array.object!.new()
+        for tag in tags {
+            _ = tagArray.push!(tag)
+        }
+        _ = jsObject.acceptWebSocket!(server, tagArray)
+        return WebSocket(client)
+    }
+
+    /// The WebSockets accepted with `acceptWebSocket(tags:)`, including ones
+    /// hibernated and woken back up, optionally filtered to those accepted
+    /// with `tag`.
+    public func getWebSockets(tag: String? = nil) -> [WebSocket] {
+        let result = tag.map { jsObject.getWebSockets!($0) } ?? jsObject.getWebSockets!()
+        return JSArray(result.object!)?.compactMap { $0.object }.map(WebSocket.init) ?? []
+    }
+}
+
+/// A message received in `DurableObject.webSocketMessage(_:_:)`.
+public enum WebSocketMessage: Sendable {
+    case text(String)
+    case binary([UInt8])
+
+    /// Wraps the JavaScript `MessageEvent.data` the runtime passes to a
+    /// hibernatable WebSocket's message handler: a `string` or an
+    /// `ArrayBuffer`.
+    init(_ value: JSValue) {
+        if let string = value.string {
+            self = .text(string)
+        } else {
+            let array = JSTypedArray<UInt8>(unsafelyWrapping: JSObject.global.Uint8Array.object!.new(value.object!))
+            self = .binary(array.withUnsafeBytes { Array($0) })
+        }
+    }
+}
+
+/// A hibernatable WebSocket, accepted with
+/// `DurableObjectState.acceptWebSocket(tags:)` and delivered back to
+/// `DurableObject.webSocketMessage(_:_:)`/`webSocketClose`/`webSocketError`,
+/// or read with `DurableObjectState.getWebSockets(tag:)`.
+public final class WebSocket: @unchecked Sendable {
+    /// The underlying JavaScript `WebSocket`.
+    public let jsObject: JSObject
+
+    public init(_ jsObject: JSObject) {
+        self.jsObject = jsObject
+    }
+
+    /// Sends a text message.
+    public func send(_ text: String) {
+        _ = jsObject.send!(text)
+    }
+
+    /// Sends a binary message.
+    public func send(_ bytes: [UInt8]) {
+        _ = jsObject.send!(JSTypedArray<UInt8>(bytes).jsObject)
+    }
+
+    /// Closes the connection.
+    public func close(code: Int = 1000, reason: String = "") {
+        _ = jsObject.close!(code, reason)
+    }
+
+    /// The tags this WebSocket was accepted with.
+    public var tags: [String] {
+        JSArray(jsObject.tags.object!)?.compactMap(\.string) ?? []
+    }
+
+    /// Stores `value` on this WebSocket so it survives hibernation, readable
+    /// later with `deserializeAttachment(as:)`. workerd limits the
+    /// serialized attachment to 2,048 bytes.
+    public func serializeAttachment(_ value: some ConvertibleToJSValue) {
+        _ = jsObject.serializeAttachment!(value)
+    }
+
+    /// The value stored with `serializeAttachment(_:)`, or `nil` when there
+    /// is none or it is not a `T`.
+    public func deserializeAttachment<T: ConstructibleFromJSValue>(as type: T.Type = T.self) -> T? {
+        let value = jsObject.deserializeAttachment!()
+        return value.isUndefined || value.isNull ? nil : T.construct(from: value)
+    }
 }
 
 /// A Durable Object's key-value storage: the runtime's `ctx.storage`.
@@ -70,7 +183,9 @@ public final class DurableObjectStorage: @unchecked Sendable {
 
     /// The value stored under `key`, or `nil` when there is none or it is not
     /// a `T`.
-    public func get<T: ConstructibleFromJSValue>(_ key: String, as type: T.Type = T.self) async throws -> T? {
+    public func get<T: ConstructibleFromJSValue>(_ key: String, as type: T.Type = T.self)
+        async throws -> T?
+    {
         let value = try await JSPromise(jsObject.get!(key).object!)!.value
         return value.isUndefined ? nil : T.construct(from: value)
     }
@@ -111,6 +226,12 @@ public final class DurableObjectNamespace: @unchecked Sendable {
         jsObject.idFromName!(name).toString().string ?? name
     }
 
+    /// A new id no other object has, as a hex string: the object is created
+    /// near the first request that reaches it, and never shared.
+    public func newUniqueID() -> String {
+        jsObject.newUniqueId!().toString().string ?? ""
+    }
+
     /// The stub for the object with hex id `id` (from `idFromName(_:)` or
     /// a Durable Object's own `DurableObjectState.id`) — unlike
     /// `get(named:)`, `id` is used as-is, not re-hashed as a name.
@@ -120,11 +241,12 @@ public final class DurableObjectNamespace: @unchecked Sendable {
 }
 
 /// A client for one Durable Object.
-public final class DurableObjectStub: RPCStub {}
+
+public final class DurableObjectStub: RPCStub, @unchecked Sendable {}
 
 /// A service binding, such as `services` in wrangler.jsonc: calls another
 /// worker's `@RPC` functions and `fetch` handler.
-public final class Fetcher: RPCStub {}
+public final class Fetcher: RPCStub, @unchecked Sendable {}
 
 /// A JavaScript RPC stub: a Durable Object stub or a service binding.
 public class RPCStub: @unchecked Sendable {
@@ -158,6 +280,15 @@ public class RPCStub: @unchecked Sendable {
     public func fetch(_ url: String) async throws -> FetchResponse {
         let response = try await awaitValue(invoke("fetch", [url]))
         return FetchResponse(response.object!)
+    }
+
+    /// Sends `req` to the target's `fetch` handler and returns its response
+    /// unchanged — including any WebSocket a Durable Object target accepted
+    /// with `DurableObjectState.acceptWebSocket(tags:)`, so returning it
+    /// from `@Event(.fetch)` completes the upgrade `req` started.
+    public func fetch(_ req: Request) async throws -> Response {
+        let response = try await awaitValue(invoke("fetch", [req.jsObject]))
+        return Response(raw: FetchResponse(response.object!))
     }
 
     /// Calls `stub[method](...arguments)` through `Reflect.apply`. JavaScriptKit

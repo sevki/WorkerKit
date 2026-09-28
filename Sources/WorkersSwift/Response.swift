@@ -9,6 +9,18 @@ public struct Response: Sendable {
     public var headers: [(name: String, value: String)]
     /// The response body, as raw bytes.
     public var body: [UInt8]
+    /// The client end of a WebSocket pair to upgrade the connection to, set
+    /// by ``webSocketUpgrade(_:)``. When set, `jsValue` hands it to the
+    /// JavaScript `Response` constructor's `webSocket` option instead of
+    /// building a body from `body`/`headers`.
+    var webSocket: WebSocket?
+
+    /// An already-built JavaScript `Response`, returned by `jsValue`
+    /// unchanged — no reconstruction, so a WebSocket a nested `fetch` call's
+    /// target Durable Object accepted (see `RPCStub.fetch(_:Request)`) stays
+    /// attached. `webSocketUpgrade(_:)` doesn't use this: it builds its 101
+    /// response itself.
+    var raw: FetchResponse?
 
     /// Creates a response directly. Most handlers instead start from
     /// ``ok(_:)``, ``text(_:status:)``, ``error(_:_:)`` or ``empty(status:)``.
@@ -16,6 +28,14 @@ public struct Response: Sendable {
         self.status = status
         self.headers = headers
         self.body = body
+    }
+
+    /// Wraps an already-built JavaScript `Response`, unchanged.
+    init(raw: FetchResponse) {
+        status = 0
+        headers = []
+        body = []
+        self.raw = raw
     }
 
     /// A `200 OK` plain-text response.
@@ -36,6 +56,16 @@ public struct Response: Sendable {
     /// A response without a body, `204 No Content` by default.
     public static func empty(status: Int = 204) -> Response {
         Response(status: status)
+    }
+
+    /// A `101 Switching Protocols` response that upgrades the connection to
+    /// `client`, the WebSocket `DurableObjectState.acceptWebSocket(tags:)`
+    /// returned. Return this from `DurableObject.fetch(_:)` to complete a
+    /// WebSocket upgrade request.
+    public static func webSocketUpgrade(_ client: WebSocket) -> Response {
+        var response = Response(status: 101)
+        response.webSocket = client
+        return response
     }
 
     /// Returns a copy with the header field `name: value` appended.
@@ -67,6 +97,16 @@ extension Response {
 
     /// The JavaScript `Response` for this response.
     public var jsValue: JSValue {
+        if let raw {
+            return .object(raw.jsObject)
+        }
+        if let webSocket {
+            let options = JSObject()
+            options["status"] = .number(101)
+            options["webSocket"] = .object(webSocket.jsObject)
+            return JSObject.global.Response.object!.new(JSValue.null, options).jsValue
+        }
+
         let response = validated()
 
         let headers = JSObject.global.Headers.object!.new()

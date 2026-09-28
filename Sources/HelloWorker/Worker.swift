@@ -1,14 +1,9 @@
 import Distributed
+import HelloWorkerActors
 import JavaScriptKit
-import WorkersSwift
-
-#if canImport(WASILibc)
+import WorkersDistributed
 import WASILibc
-#elseif canImport(Glibc)
-import Glibc
-#elseif canImport(Darwin)
-import Darwin
-#endif
+import WorkersSwift
 
 @Event(.fetch)
 func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
@@ -217,6 +212,22 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         }
         return .ok(totals.map(String.init).joined(separator: ","))
 
+    case ("GET", "/ws/echo"):
+        // Forwards the upgrade request to EchoSocket.fetch(_:), which
+        // accepts a hibernatable WebSocket and returns the 101 response
+        // carrying its client end; RPCStub.fetch(_:Request) hands that
+        // response straight back so the runtime completes the handshake
+        // with the original caller.
+        return try await env.durableObject("ECHO").get(named: "e2e").fetch(req)
+
+    case ("GET", WorkersActorSystem.gatewayPath):
+        // Forwards the upgrade request to a fresh RPCGateway per connection:
+        // a hibernatable WebSocket a native CLI (see HelloWorkerCLI, using
+        // WorkersActorSystem's native build) can call this worker's distributed
+        // actors through, in plain JSON instead of JavaScriptKit's JSValue.
+        let gateways = env.durableObject("RPCGATEWAY")
+        return try await gateways.get(id: gateways.newUniqueID()).fetch(req)
+
     case ("GET", "/no-content"):
         return .empty()
 
@@ -235,88 +246,8 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
     a + b
 }
 
-/// A `distributed actor` reachable over Workers RPC through
-/// `WorkersActorSystem`. See `rfcs/distributed-actor-rpc.md`.
-distributed actor Doubler {
-    typealias ActorSystem = WorkersActorSystem
-
-    distributed func double(_ n: Int) -> Int {
-        n * 2
-    }
-
-    /// A generic distributed func: exercises generic-substitution transport
-    /// (recordGenericSubstitution/decodeGenericSubstitutions), not just
-    /// plain arguments.
-    distributed func echo<T: Codable & Sendable>(_ value: T) -> T {
-        value
-    }
-
-    /// Exercises the lossless Int64 wire encoding: 9007199254740993
-    /// (2^53 + 1) is not exactly representable as a Double, so this would
-    /// come back rounded if JSValueEncoder/JSValueDecoder fell through to
-    /// JavaScriptKit's default Double-backed JS number conversion.
-    distributed func bigNumber(_ n: Int64) -> Int64 {
-        n
-    }
-
-    /// Exercises the same lossless-Int64 path, but nested inside a
-    /// collection: `[Int64]` (and `Dictionary`/`Optional`) each have their
-    /// own `ConvertibleToJSValue` conformance that forwards to each
-    /// element's default (Double-backed) conversion, bypassing
-    /// JSValueEncoder's Int64 special case unless it explicitly excludes
-    /// collections from that shortcut.
-    distributed func bigNumbers(_ values: [Int64]) -> [Int64] {
-        values
-    }
-
-    /// Exercises JSValueEncoder's superEncoder()/superEncoder(forKey:): Dog
-    /// only encodes/decodes its own `breed` directly, delegating `name` to
-    /// Animal's Codable conformance through super.encode(to:)/super.init(from:).
-    distributed func identify(_ dog: Dog) -> String {
-        "\(dog.name) is a \(dog.breed)"
-    }
-}
-
-class Animal: Codable {
-    let name: String
-    private enum CodingKeys: String, CodingKey { case name }
-
-    init(name: String) {
-        self.name = name
-    }
-
-    required init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        name = try container.decode(String.self, forKey: .name)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(name, forKey: .name)
-    }
-}
-
-final class Dog: Animal, @unchecked Sendable {
-    let breed: String
-    private enum CodingKeys: String, CodingKey { case breed }
-
-    init(name: String, breed: String) {
-        self.breed = breed
-        super.init(name: name)
-    }
-
-    required init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        breed = try container.decode(String.self, forKey: .breed)
-        try super.init(from: container.superDecoder())
-    }
-
-    override func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(breed, forKey: .breed)
-        try super.encode(to: container.superEncoder())
-    }
-}
+// Doubler, Animal and Dog live in HelloWorkerActors, shared with
+// HelloWorkerCLI; this worker hosts the real Doubler instance below.
 
 // MARK: - Dining philosophers
 
@@ -536,5 +467,44 @@ final class Counter {
             throw JSException(message: "counters row went missing")
         }
         return row.value
+    }
+}
+
+/// A Durable Object that accepts a hibernatable WebSocket and echoes each
+/// message back prefixed with a running count, kept as a WebSocket
+/// attachment rather than instance state — so it would survive the object
+/// being evicted and hibernated between messages, not just kept alive by
+/// this process staying up.
+@DurableObject
+final class EchoSocket {
+    let state: DurableObjectState
+
+    init(state: DurableObjectState, env: Env) {
+        self.state = state
+    }
+
+    func fetch(_ req: Request) async throws -> Response {
+        guard req.headers.get("Upgrade") == "websocket" else {
+            return .error("Expected Upgrade: websocket", 426)
+        }
+        return .webSocketUpgrade(state.acceptWebSocket(tags: ["echo"]))
+    }
+
+    func webSocketMessage(_ ws: WebSocket, _ message: WebSocketMessage) async throws {
+        let count = (ws.deserializeAttachment(as: Int.self) ?? 0) + 1
+        ws.serializeAttachment(count)
+        switch message {
+        case .text(let text):
+            ws.send("\(count): \(text)")
+        case .binary(let bytes):
+            ws.send(bytes)
+        }
+    }
+
+    func webSocketClose(_ ws: WebSocket, code: Int, reason: String, wasClean: Bool) async throws {
+        try await state.storage.put("lastClose", "\(code) \(reason) \(wasClean)")
+        // The runtime does not complete the closing handshake on its own;
+        // this echoes the client's own code/reason back to finish it.
+        ws.close(code: code, reason: reason)
     }
 }

@@ -4,8 +4,9 @@ Call a Durable Object, or another worker, as an ordinary Swift `distributed acto
 
 ## Overview
 
-``WorkersActorSystem`` backs Swift's `distributed actor` with the same
-transport ``RPC()`` already uses (an ``RPCStub``), instead of a new one. A
+`WorkersActorSystem`, from the `WorkersDistributed` library, backs Swift's
+`distributed actor` with the same transport ``RPC()`` already uses (an
+``RPCStub``), instead of a new one. A
 `distributed func`'s mangled identifier is never interpreted by this
 library — it's passed through opaquely to the callee, which hands it to the
 Swift runtime's own `executeDistributedTarget`, the same mechanism that
@@ -15,7 +16,7 @@ in the repository for the full design discussion.
 
 A `WorkersActorSystem` plays one of two roles, and every worker that hosts a
 distributed actor needs exactly one fixed RPC entry point on the callee
-side, forwarding to ``WorkersActorSystem/receive(identifier:arguments:genericSubstitutions:)``:
+side, forwarding to `WorkersActorSystem.receive(identifier:arguments:genericSubstitutions:)`:
 
 ```swift
 @RPC func __workersSwiftDistributedCall(
@@ -27,7 +28,7 @@ side, forwarding to ``WorkersActorSystem/receive(identifier:arguments:genericSub
 }
 ```
 
-The method must be named exactly ``WorkersActorSystem/entryPointName``
+The method must be named exactly `WorkersActorSystem.entryPointName`
 (`__workersSwiftDistributedCall`) — `worker-build` finds it the same way it
 finds any other ``RPC()`` method, through the Wasm export it generates.
 
@@ -80,15 +81,15 @@ let greeting = try await greeter.hello("world")
 ```
 
 The id passed to `.resolve(id:using:)` is never interpreted in this mode —
-``WorkersActorSystem/host(_:)`` always dispatches to the one hosted
+`WorkersActorSystem.host(_:)` always dispatches to the one hosted
 instance, regardless of what id a caller used.
 
 ## One instance per Durable Object id
 
 For a distributed actor with real per-instance identity and state — the
-Durable Object case — ``WorkersActorSystem/init(durableObjects:)`` routes
+Durable Object case — `WorkersActorSystem(durableObjects:)` routes
 each call to the Durable Object instance named by the target actor's own
-id, and ``WorkersActorSystem/host(_:as:)`` hosts the actor a Durable Object
+id, and `WorkersActorSystem.host(_:as:)` hosts the actor a Durable Object
 represents, under that same object's id.
 
 ```swift
@@ -158,16 +159,40 @@ distributed actor Greeter {
 }
 ```
 
+## Calling from outside a worker
+
+Outside a worker — a native CLI, a server, a test — the same
+`WorkersActorSystem` type is backed by a WebSocket instead of Workers RPC.
+Declare the actor once, in a module both the worker and the native tool
+depend on, and the tool calls it exactly as another worker would:
+
+```swift
+let system = WorkersActorSystem(worker: URL(string: "https://swift.example.workers.dev")!)
+let greeter = try Greeter.resolve(id: "greeter", using: system)
+let greeting = try await greeter.hello("world")
+system.close()
+```
+
+Both builds compile the same declaration against the same actor system
+type, so they agree on every distributed method's mangled identifier. The
+worker end is the library's `RPCGateway` Durable Object, served at
+`WorkersActorSystem.gatewayPath`, which relays each call to the worker's
+entry point through its `SELF` service binding. Give each connection its
+own gateway:
+
+```swift
+case ("GET", WorkersActorSystem.gatewayPath):
+    let gateways = env.durableObject("RPCGATEWAY")
+    return try await gateways.get(id: gateways.newUniqueID()).fetch(req)
+```
+
+See `HelloWorkerActors` and `HelloWorkerCLI` in the repository for a
+complete example.
+
 ## Topics
-
-### The actor system
-
-- ``WorkersActorSystem``
-- ``WorkersInvocationEncoder``
-- ``WorkersInvocationDecoder``
-- ``WorkersInvocationResultHandler``
 
 ### Routing to a Durable Object instance
 
 - ``DurableObjectNamespace/idFromName(_:)``
 - ``DurableObjectNamespace/get(id:)``
+- ``DurableObjectNamespace/newUniqueID()``

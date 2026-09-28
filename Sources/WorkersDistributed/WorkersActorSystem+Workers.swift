@@ -1,7 +1,14 @@
+#if arch(wasm32)
 import Distributed
 import JavaScriptKit
+import WorkersSwift
 
-/// A `DistributedActorSystem` backed by Workers RPC.
+/// A `DistributedActorSystem` backed by Workers RPC — this is the wasm32
+/// implementation, for code running inside a worker. A native process gets
+/// the same type backed by a WebSocket instead (see
+/// `WorkersActorSystem+WebSocket.swift`), so a `distributed actor` declared
+/// once against `WorkersActorSystem` compiles, and mangles, identically for
+/// both.
 ///
 /// A `distributed func` call is transported the same way `@RPC` already
 /// transports a call — through an ``RPCStub`` (a service binding or a
@@ -243,6 +250,62 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
     }
 }
 
+extension WorkersActorSystem {
+    /// A JSON front door onto `receive(identifier:arguments:genericSubstitutions:)`,
+    /// for exposing this system's locally-hosted actor to a caller that
+    /// can't use `JSValue`/JavaScriptKit — a native Swift CLI (see
+    /// `WorkersActorSystem`'s native build) talking plain JSON over a WebSocket, for
+    /// instance. Parses `text` as
+    /// `{"id","identifier","arguments","genericSubstitutions"}` (`id` and
+    /// `genericSubstitutions` optional) and returns `{"id","result"}` or
+    /// `{"id","error"}` as JSON text, `id` echoed back unchanged so a caller
+    /// can correlate replies on a connection carrying several calls at
+    /// once.
+    ///
+    /// Not safe yet for a call whose arguments or result contain an `Int64`/
+    /// `UInt64` outside ±2^53: this goes through a JS `JSON.parse`/
+    /// `JSON.stringify` round trip, which collapses a number that size to a
+    /// Double regardless of `JSValueEncoder`'s own BigInt handling.
+    public func receiveJSON(_ text: String) async -> String {
+        await Self.handleJSONCall(text) { identifier, arguments, genericSubstitutions in
+            try await receive(identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions)
+        }
+    }
+
+    /// Parses one JSON call, runs it with `dispatch`, and returns the JSON
+    /// reply — shared by `receiveJSON(_:)` (dispatches locally) and
+    /// `RPCGateway` (relays to the worker's entry point).
+    static func handleJSONCall(
+        _ text: String,
+        dispatch: (_ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]) async throws -> JSValue
+    ) async -> String {
+        let call = JSObject.global.JSON.object!.parse!(text).object ?? JSObject()
+        let id = call["id"]
+        guard let identifier = call["identifier"].string else {
+            return jsonReply(id: id, error: "malformed call: missing identifier")
+        }
+        let genericSubstitutions = JSArray(call["genericSubstitutions"].object ?? JSObject())?.compactMap(\.string) ?? []
+        do {
+            return jsonReply(id: id, result: try await dispatch(identifier, call["arguments"], genericSubstitutions))
+        } catch {
+            return jsonReply(id: id, error: "\(error)")
+        }
+    }
+
+    private static func jsonReply(id: JSValue, result: JSValue? = nil, error: String? = nil) -> String {
+        let reply = JSObject()
+        reply["id"] = id
+        if let result {
+            reply["result"] = result
+        }
+        if let error {
+            reply["error"] = .string(error)
+        }
+        return JSObject.global.JSON.object!.stringify!(reply).string ?? "{}"
+    }
+}
+
+
 public struct WorkersInvocationEncoder: DistributedTargetInvocationEncoder {
     public typealias SerializationRequirement = Codable
 
@@ -319,3 +382,4 @@ public struct WorkersInvocationResultHandler: DistributedTargetInvocationResultH
         box.errorThrown = error
     }
 }
+#endif

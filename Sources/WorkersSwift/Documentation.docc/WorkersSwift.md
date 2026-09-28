@@ -69,13 +69,6 @@ away from any Web or Workers API the library does not wrap yet.
 - ``RPCStub``
 - ``FetchResponse``
 
-### Distributed actors
-
-- ``WorkersActorSystem``
-- ``WorkersInvocationEncoder``
-- ``WorkersInvocationDecoder``
-- ``WorkersInvocationResultHandler``
-
 ### KV
 
 - ``KVStore``

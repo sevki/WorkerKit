@@ -44,6 +44,10 @@ jobs:
 
       - name: swift build HelloWorkerCLI (static)
         run: |
+          # --show-bin-path only prints the path and exits - it doesn't
+          # build - so this needs its own build invocation first, with
+          # identical flags to the --show-bin-path query below.
+          swift build --swift-sdk x86_64-swift-linux-musl --product HelloWorkerCLI -c release
           bin=$(swift build --swift-sdk x86_64-swift-linux-musl --product HelloWorkerCLI -c release --show-bin-path)
           echo "HELLO_WORKER_CLI_BIN=$bin/HelloWorkerCLI" >> "$GITHUB_ENV"
           ls -l "$bin/HelloWorkerCLI"

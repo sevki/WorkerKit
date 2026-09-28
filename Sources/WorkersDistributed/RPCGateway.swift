@@ -35,7 +35,9 @@ public final class RPCGateway {
     }
 
     public func fetch(_ req: Request) async throws -> Response {
-        guard req.headers.get("Upgrade") == "websocket" else {
+        // HTTP upgrade protocol names are case-insensitive - a standards-
+        // compliant client may send "WebSocket" or any other capitalization.
+        guard req.headers.get("Upgrade")?.lowercased() == "websocket" else {
             return .error("Expected Upgrade: websocket", 426)
         }
         return .webSocketUpgrade(state.acceptWebSocket(tags: ["rpc"]))

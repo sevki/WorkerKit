@@ -25,7 +25,29 @@ public macro Event(_ event: WorkerEvent) = #externalMacro(module: "WorkersSwiftM
 /// `@RPC`. Bind it under its class name, as in wrangler.jsonc:
 ///
 ///     "durable_objects": { "bindings": [{ "name": "COUNTER", "class_name": "Counter" }] }
+///
+/// If the class declares exactly one property of type `WorkersActorSystem`,
+/// this also generates the `__workersSwiftDistributedCall` forwarder that
+/// hosts a distributed actor through it, so a Durable Object that hosts one
+/// needs only:
+///
+///     @DurableObject
+///     final class CounterObject {
+///         let hostSystem: WorkersActorSystem
+///         let counter: Counter
+///
+///         init(state: DurableObjectState, env: Env) {
+///             let hostSystem = WorkersActorSystem()
+///             self.hostSystem = hostSystem
+///             counter = hostSystem.host(state.id) { Counter(actorSystem: $0) }
+///         }
+///     }
+///
+/// Write the forwarder by hand instead when the class hosts more than one
+/// `WorkersActorSystem` (the convention only applies when there's exactly
+/// one to be unambiguous) — see `WorkersActorSystem`'s documentation.
 @attached(peer, names: prefixed(__workersSwift_do_))
+@attached(member, names: named(__workersSwiftDistributedCall))
 @attached(extension, conformances: DurableObject)
 public macro DurableObject() = #externalMacro(module: "WorkersSwiftMacros", type: "DurableObjectMacro")
 

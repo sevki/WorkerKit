@@ -6,8 +6,12 @@ import SwiftSyntaxMacros
 /// - a conformance to `DurableObject`, if the class does not declare one;
 /// - the `workers_do:<Class>[:<rpc>,<rpc>…]` Wasm export. The shim calls it
 ///   to register the class, and `worker-build` reads its name to generate
-///   the exported JavaScript class and its RPC methods.
-public struct DurableObjectMacro: PeerMacro, ExtensionMacro {
+///   the exported JavaScript class and its RPC methods;
+/// - if the class declares exactly one property of type `WorkersActorSystem`
+///   and does not already declare `__workersSwiftDistributedCall` itself,
+///   the `@RPC` forwarder that hosts a distributed actor through it — see
+///   `distributedHostPropertyName(in:)`.
+public struct DurableObjectMacro: PeerMacro, MemberMacro, ExtensionMacro {
     public static func expansion(
         of node: AttributeSyntax,
         providingPeersOf declaration: some DeclSyntaxProtocol,
@@ -26,9 +30,12 @@ public struct DurableObjectMacro: PeerMacro, ExtensionMacro {
                 "@DurableObject class name \(name) must also be a JavaScript class name (ASCII letters, digits, _ and $)"
             )
         }
-        let rpcMethods = classDecl.memberBlock.members
+        var rpcMethods = classDecl.memberBlock.members
             .compactMap { $0.decl.as(FunctionDeclSyntax.self) }
             .filter { $0.attributes.contains(where: isRPCAttribute) }
+        if let synthesized = synthesizedDistributedCallMethod(in: classDecl) {
+            rpcMethods.append(synthesized)
+        }
         if let invalid = rpcMethods.first(where: { !isJavaScriptIdentifier($0.name.text) }) {
             throw MacroExpansionErrorMessage(
                 "@RPC method name \(invalid.name.text) must also be a JavaScript method name (ASCII letters, digits, _ and $)"
@@ -87,7 +94,76 @@ public struct DurableObjectMacro: PeerMacro, ExtensionMacro {
         let conformances = protocols.map(\.trimmedDescription).joined(separator: ", ")
         return [try ExtensionDeclSyntax("extension \(type.trimmed): \(raw: conformances) {}")]
     }
+
+    public static func expansion(
+        of node: AttributeSyntax,
+        providingMembersOf declaration: some DeclGroupSyntax,
+        conformingTo protocols: [TypeSyntax],
+        in context: some MacroExpansionContext
+    ) throws -> [DeclSyntax] {
+        guard let classDecl = declaration.as(ClassDeclSyntax.self),
+              let method = synthesizedDistributedCallMethod(in: classDecl) else {
+            return []
+        }
+        return [DeclSyntax(method)]
+    }
 }
+
+/// The name of the class's stored property of type `WorkersActorSystem`,
+/// if it declares exactly one — the convention `@DurableObject` looks for
+/// to auto-generate the `__workersSwiftDistributedCall` RPC forwarder that
+/// hosts a distributed actor through it (see `WorkersActorSystem`'s
+/// per-Durable-Object-id hosting). Ambiguous (zero or more than one match)
+/// falls back to requiring the forwarder be written by hand, same as
+/// before this convention existed.
+private func distributedHostPropertyName(in classDecl: ClassDeclSyntax) -> String? {
+    let candidates = classDecl.memberBlock.members.compactMap { member -> String? in
+        guard let variable = member.decl.as(VariableDeclSyntax.self) else { return nil }
+        for binding in variable.bindings {
+            guard let type = binding.typeAnnotation?.type, type.trimmedDescription == "WorkersActorSystem",
+                  let identifier = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
+            return identifier.identifier.text
+        }
+        return nil
+    }
+    return candidates.count == 1 ? candidates[0] : nil
+}
+
+/// The `__workersSwiftDistributedCall` RPC forwarder for `classDecl`'s
+/// `WorkersActorSystem` property (see `distributedHostPropertyName(in:)`),
+/// or `nil` if the class doesn't have exactly one such property or already
+/// declares the method itself.
+///
+/// Deliberately has no `@RPC` attribute of its own: the peer macro
+/// expansion below adds it to `rpcMethods` directly, and a member macro's
+/// synthesized declaration doesn't get the right `lexicalContext` if one of
+/// its own attributes is itself a macro — the compiler re-expands `@RPC` on
+/// it as if it were a top-level function (wrong `@_cdecl` target, spurious
+/// Sendable/capture errors), not as a method of the class it's actually a
+/// member of.
+private func synthesizedDistributedCallMethod(in classDecl: ClassDeclSyntax) -> FunctionDeclSyntax? {
+    let alreadyDeclared = classDecl.memberBlock.members.contains {
+        $0.decl.as(FunctionDeclSyntax.self)?.name.text == WorkersActorSystemEntryPointName
+    }
+    guard !alreadyDeclared, let hostProperty = distributedHostPropertyName(in: classDecl) else {
+        return nil
+    }
+    let source: DeclSyntax = """
+        func \(raw: WorkersActorSystemEntryPointName)(
+            _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
+        ) async throws -> JSValue {
+            try await \(raw: hostProperty).receive(
+                identifier: identifier, arguments: arguments, genericSubstitutions: genericSubstitutions
+            )
+        }
+        """
+    return source.as(FunctionDeclSyntax.self)
+}
+
+/// `WorkersActorSystem.entryPointName`'s value, duplicated here since the
+/// macro target cannot import `WorkersSwift` (that would be circular — this
+/// package is what `WorkersSwift` depends on for macro expansion).
+private let WorkersActorSystemEntryPointName = "__workersSwiftDistributedCall"
 
 /// `@RPC` marks a method callable by other workers:
 ///

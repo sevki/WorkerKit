@@ -197,6 +197,13 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
         // same reason the worker-side transport sets it (see
         // WorkersActorSystem+Workers.swift).
         decoder.userInfo[.actorSystemKey] = self
+        // JSONDecoder's default dataDecodingStrategy expects Data as a
+        // base64 string, but the worker side's JSValueEncoder doesn't
+        // special-case Data at all - it encodes (and JSValueDecoder
+        // decodes) through Data's own Codable conformance, an unkeyed byte
+        // array. Match that here instead of JSONEncoder/Decoder's own
+        // Foundation-specific default.
+        decoder.dataDecodingStrategy = .deferredToData
         return try decoder.decode(Res.self, from: JSONSerialization.data(withJSONObject: result, options: [.fragmentsAllowed]))
     }
 
@@ -273,7 +280,12 @@ public struct WorkersInvocationEncoder: DistributedTargetInvocationEncoder {
     }
 
     public mutating func recordArgument<Value: Codable>(_ argument: RemoteCallArgument<Value>) throws {
-        let data = try JSONEncoder().encode(argument.value)
+        let encoder = JSONEncoder()
+        // Match the worker side's JSValueEncoder, which doesn't
+        // special-case Data - see the matching note on the decode side in
+        // remoteCall(on:target:invocation:throwing:returning:).
+        encoder.dataEncodingStrategy = .deferredToData
+        let data = try encoder.encode(argument.value)
         recorded.append(try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]))
     }
 

@@ -169,15 +169,21 @@ public final class WebSocket: @unchecked Sendable {
         _ = jsObject.close!(code, reason)
     }
 
+    /// Reserved WebSocket close codes the spec explicitly forbids sending
+    /// in a real Close frame: they're synthesized locally as a
+    /// `CloseEvent`/`webSocketClose` code for a close the connection never
+    /// actually carried a code for — no status received (1005), an
+    /// abnormal closure (1006), and a TLS handshake failure (1015).
+    private static let unsendableCloseCodes: Set<Int> = [1005, 1006, 1015]
+
     /// Closes the connection, echoing the code and reason a peer's own
     /// close frame arrived with — for completing the handshake in
-    /// `DurableObject.webSocketClose(_:code:reason:wasClean:)`. Handles
-    /// code 1005 ("no status received") specially: it's a reserved
-    /// pseudo-code the runtime synthesizes locally for a close frame that
-    /// carried none, and cannot itself be sent in a Close frame (`close(code:
-    /// 1005)` throws) — closes without a code instead, same as the peer's.
+    /// `DurableObject.webSocketClose(_:code:reason:wasClean:)`. One of the
+    /// reserved, unsendable close codes above echoes as a close with no
+    /// code at all instead, since sending it back (`close(code: 1005)`,
+    /// say) throws.
     public func closeEchoing(code: Int, reason: String) {
-        guard code != 1005 else {
+        guard !Self.unsendableCloseCodes.contains(code) else {
             _ = jsObject.close!()
             return
         }

@@ -131,3 +131,26 @@ jobs:
           E2E_RUNTIMES: workerd,celld
           WORKER_DIR: build/worker
         run: npm run test:e2e
+
+  deploy-example:
+    name: Deploy the example worker to Cloudflare Workers
+    needs: [swift, e2e]
+    # Cloudflare Workers runs on workerd itself, so this deploys the exact
+    # artifact e2e already verified against real workerd/celld. Gated on a
+    # repo variable (Settings > Secrets and variables > Actions > Variables
+    # > CLOUDFLARE_DEPLOY_ENABLED = true) so this doesn't fail on every
+    # push to main before CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID exist.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.CLOUDFLARE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: worker
+          path: build/worker
+
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

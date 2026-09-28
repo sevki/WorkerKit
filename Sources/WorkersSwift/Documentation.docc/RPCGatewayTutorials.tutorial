@@ -1,0 +1,18 @@
+@Tutorials(name: "Calling a Worker's Distributed Actors from a Native CLI") {
+    @Intro(title: "Calling a Worker's Distributed Actors from a Native CLI") {
+        Host a `distributed actor` in a worker, expose it to native
+        processes through `RPCGateway`, and call it from a command-line
+        tool exactly the way another worker would — no hand-written stub,
+        no HTTP endpoint to design.
+    }
+
+    @Chapter(name: "Build the worker, the gateway, and the CLI") {
+        @Image(source: "rpc-gateway-chapter.png", alt: "A stylized banner for the tutorial.")
+
+        A single `distributed actor` declaration, shared between a worker
+        and a native CLI target, reached two different ways: Workers RPC
+        inside the worker, and a plain WebSocket everywhere else.
+
+        @TutorialReference(tutorial: "doc:RPCGatewayAndCLI")
+    }
+}

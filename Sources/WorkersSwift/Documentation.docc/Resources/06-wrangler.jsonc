@@ -1,0 +1,24 @@
+// wrangler.jsonc
+{
+	"name": "greeter-worker",
+	"main": "build/worker/worker.mjs",
+	"no_bundle": true,
+	"compatibility_date": "2026-01-01",
+	"durable_objects": {
+		"bindings": [
+			// WorkersDistributed's gateway for native callers, served at
+			// WorkersActorSystem.gatewayPath.
+			{ "name": "RPCGATEWAY", "class_name": "RPCGateway" }
+		]
+	},
+	"migrations": [
+		// SQLite-backed only because that's the kind every plan supports;
+		// RPCGateway stores nothing itself.
+		{ "tag": "v1", "new_sqlite_classes": ["RPCGateway"] }
+	],
+	"services": [
+		// RPCGateway relays each call to this worker's own
+		// __workersSwiftDistributedCall entry point through this binding.
+		{ "binding": "SELF", "service": "greeter-worker" }
+	]
+}

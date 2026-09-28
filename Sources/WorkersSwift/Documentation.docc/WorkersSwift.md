@@ -39,6 +39,10 @@ away from any Web or Workers API the library does not wrap yet.
 - ``Event(_:)``
 - ``WorkerEvent``
 
+### Tutorials
+
+- <doc:RPCGatewayTutorials>
+
 ### Requests and responses
 
 - ``Request``

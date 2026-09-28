@@ -38,8 +38,10 @@ public protocol DurableObject: AnyObject {
 
     /// Runs when a WebSocket accepted with
     /// `DurableObjectState.acceptWebSocket(tags:)` receives a close frame.
-    /// The runtime does not complete the closing handshake on its own —
-    /// call `ws.close(code:reason:)` here, or the client's own `close()`
+    /// The runtime does not complete the closing handshake on its own — the
+    /// default implementation calls `ws.close(code:reason:)` with the same
+    /// code and reason, so an override that needs to run cleanup first must
+    /// still call it itself before returning, or the peer's own `close()`
     /// hangs until it times out.
     func webSocketClose(_ ws: WebSocket, code: Int, reason: String, wasClean: Bool) async throws
 
@@ -57,7 +59,15 @@ extension DurableObject {
 
     public func webSocketMessage(_ ws: WebSocket, _ message: WebSocketMessage) async throws {}
 
-    public func webSocketClose(_ ws: WebSocket, code: Int, reason: String, wasClean: Bool) async throws {}
+    // The runtime doesn't complete the closing handshake on its own (see
+    // this requirement's doc comment) - a no-op default would leave every
+    // peer-initiated close hanging until timeout for any conformer that
+    // doesn't override this. An override that needs to run cleanup before
+    // closing still can; it just has to call ws.close(code:reason:) itself
+    // instead of calling super, since this is a protocol extension.
+    public func webSocketClose(_ ws: WebSocket, code: Int, reason: String, wasClean: Bool) async throws {
+        ws.close(code: code, reason: reason)
+    }
 
     public func webSocketError(_ ws: WebSocket, _ error: JSException) async throws {}
 }

@@ -64,6 +64,9 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
         self.init(gatewayURL: components.string ?? "", logger: logger)
     }
 
+    /// The largest message, and frame, the native client accepts.
+    static let maxMessageSize = 1 << 20
+
     private init(gatewayURL url: String, logger: Logger) {
         var continuation: AsyncStream<String>.Continuation!
         let outgoing = AsyncStream<String> { continuation = $0 }
@@ -73,7 +76,14 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
         connectionTask = Task {
             let terminationError: Error
             do {
-                _ = try await WebSocketClient.connect(url: url, logger: logger) { inbound, outbound, _ in
+                // The client's frame limit defaults to 16 KiB and is enforced on
+                // received frames, but workerd sends each message as a single
+                // frame. Leaving it at the default made any reply over 16 KiB
+                // fail with close code 1009, well below the message limit.
+                let configuration = WebSocketClientConfiguration(maxFrameSize: Self.maxMessageSize)
+                _ = try await WebSocketClient.connect(
+                    url: url, configuration: configuration, logger: logger
+                ) { inbound, outbound, _ in
                     try await withThrowingTaskGroup(of: Void.self) { group in
                         group.addTask {
                             for try await text in outgoing {
@@ -81,7 +91,7 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
                             }
                         }
                         group.addTask {
-                            for try await message in inbound.messages(maxSize: 1 << 20) {
+                            for try await message in inbound.messages(maxSize: Self.maxMessageSize) {
                                 guard case .text(let text) = message, let data = text.data(using: .utf8),
                                       let reply = try? RemoteReply(jsonData: data) else {
                                     continue

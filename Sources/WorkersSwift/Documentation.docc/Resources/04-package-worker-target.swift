@@ -1,4 +1,7 @@
+// swift-tools-version: 6.3
 // Package.swift
+
+import PackageDescription
 
 let package = Package(
     name: "GreeterExample",

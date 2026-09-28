@@ -39,10 +39,10 @@ public protocol DurableObject: AnyObject {
     /// Runs when a WebSocket accepted with
     /// `DurableObjectState.acceptWebSocket(tags:)` receives a close frame.
     /// The runtime does not complete the closing handshake on its own — the
-    /// default implementation calls `ws.close(code:reason:)` with the same
-    /// code and reason, so an override that needs to run cleanup first must
-    /// still call it itself before returning, or the peer's own `close()`
-    /// hangs until it times out.
+    /// default implementation calls `ws.closeEchoing(code:reason:)` with
+    /// the same code and reason, so an override that needs to run cleanup
+    /// first must still call it itself before returning, or the peer's own
+    /// `close()` hangs until it times out.
     func webSocketClose(_ ws: WebSocket, code: Int, reason: String, wasClean: Bool) async throws
 
     /// Runs when a WebSocket accepted with
@@ -63,10 +63,10 @@ extension DurableObject {
     // this requirement's doc comment) - a no-op default would leave every
     // peer-initiated close hanging until timeout for any conformer that
     // doesn't override this. An override that needs to run cleanup before
-    // closing still can; it just has to call ws.close(code:reason:) itself
-    // instead of calling super, since this is a protocol extension.
+    // closing still can; it just has to call ws.closeEchoing(code:reason:)
+    // itself instead of calling super, since this is a protocol extension.
     public func webSocketClose(_ ws: WebSocket, code: Int, reason: String, wasClean: Bool) async throws {
-        ws.close(code: code, reason: reason)
+        ws.closeEchoing(code: code, reason: reason)
     }
 
     public func webSocketError(_ ws: WebSocket, _ error: JSException) async throws {}
@@ -167,6 +167,21 @@ public final class WebSocket: @unchecked Sendable {
     /// Closes the connection.
     public func close(code: Int = 1000, reason: String = "") {
         _ = jsObject.close!(code, reason)
+    }
+
+    /// Closes the connection, echoing the code and reason a peer's own
+    /// close frame arrived with — for completing the handshake in
+    /// `DurableObject.webSocketClose(_:code:reason:wasClean:)`. Handles
+    /// code 1005 ("no status received") specially: it's a reserved
+    /// pseudo-code the runtime synthesizes locally for a close frame that
+    /// carried none, and cannot itself be sent in a Close frame (`close(code:
+    /// 1005)` throws) — closes without a code instead, same as the peer's.
+    public func closeEchoing(code: Int, reason: String) {
+        guard code != 1005 else {
+            _ = jsObject.close!()
+            return
+        }
+        close(code: code, reason: reason)
     }
 
     /// Stores `value` on this WebSocket so it survives hibernation, readable

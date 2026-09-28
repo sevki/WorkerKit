@@ -506,7 +506,8 @@ final class EchoSocket {
     func webSocketClose(_ ws: WebSocket, code: Int, reason: String, wasClean: Bool) async throws {
         try await state.storage.put("lastClose", "\(code) \(reason) \(wasClean)")
         // The runtime does not complete the closing handshake on its own;
-        // this echoes the client's own code/reason back to finish it.
-        ws.close(code: code, reason: reason)
+        // this echoes the client's own code/reason back to finish it (code
+        // 1005's own special case, if it's that: see closeEchoing).
+        ws.closeEchoing(code: code, reason: reason)
     }
 }

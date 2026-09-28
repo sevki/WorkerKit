@@ -20,6 +20,13 @@ public struct Response: Sendable {
     /// target Durable Object accepted (see `RPCStub.fetch(_:Request)`) stays
     /// attached. `webSocketUpgrade(_:)` doesn't use this: it builds its 101
     /// response itself.
+    ///
+    /// `status`/`headers` are snapshotted from it below so code inspecting
+    /// this `Response` sees the real values, but they're read-only in
+    /// effect: `jsValue` always returns `raw` unchanged when this is set,
+    /// so mutating them (`withHeader(_:_:)`, or `status`/`headers`
+    /// directly) doesn't change what's actually sent. `body` stays empty —
+    /// reading it would need an async call `init(raw:)` can't make.
     var raw: FetchResponse?
 
     /// Creates a response directly. Most handlers instead start from
@@ -30,12 +37,27 @@ public struct Response: Sendable {
         self.body = body
     }
 
-    /// Wraps an already-built JavaScript `Response`, unchanged.
+    /// Wraps an already-built JavaScript `Response`, unchanged (see `raw`'s
+    /// doc comment for what that means for `status`/`headers`/`body`).
     init(raw: FetchResponse) {
-        status = 0
-        headers = []
+        status = raw.status
+        headers = Self.headerPairs(from: raw.headers.jsObject)
         body = []
         self.raw = raw
+    }
+
+    /// Snapshots a JS `Headers` object's entries as name/value pairs, for
+    /// `init(raw:)`.
+    private static func headerPairs(from jsHeaders: JSObject) -> [(name: String, value: String)] {
+        let entries = JSObject.global.Array.function!.from!(jsHeaders)
+        guard let array = entries.array else { return [] }
+        return array.compactMap { entry -> (name: String, value: String)? in
+            guard let pair = entry.array, pair.count == 2,
+                  let name = pair[0].string, let value = pair[1].string else {
+                return nil
+            }
+            return (name, value)
+        }
     }
 
     /// A `200 OK` plain-text response.
@@ -101,8 +123,21 @@ extension Response {
             return .object(raw.jsObject)
         }
         if let webSocket {
+            // Not `validated()`: that also checks `status` against
+            // 200...599, which a 101 upgrade is never in. Only the header
+            // check applies here - same reason the normal branch validates
+            // them, so an invalid one (e.g. a bad Sec-WebSocket-Protocol
+            // value) gets the same graceful 500 instead of a raw JS throw.
+            guard headers.allSatisfy({ isValidHeaderName($0.name) && isValidHeaderValue($0.value) }) else {
+                return Response.error("Response header is not a valid HTTP header", 500).jsValue
+            }
+            let jsHeaders = JSObject.global.Headers.object!.new()
+            for (name, value) in headers {
+                _ = jsHeaders.append!(name, value)
+            }
             let options = JSObject()
             options["status"] = .number(101)
+            options["headers"] = .object(jsHeaders)
             options["webSocket"] = .object(webSocket.jsObject)
             return JSObject.global.Response.object!.new(JSValue.null, options).jsValue
         }

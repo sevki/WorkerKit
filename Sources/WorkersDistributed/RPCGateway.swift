@@ -53,9 +53,8 @@ public final class RPCGateway {
         })
     }
 
-    public func webSocketClose(_ ws: WebSocket, code: Int, reason: String, wasClean: Bool) async throws {
-        // The runtime does not complete the closing handshake on its own.
-        ws.close(code: code, reason: reason)
-    }
+    // webSocketClose isn't overridden: DurableObject's default already
+    // completes the close handshake by echoing the peer's code and reason
+    // (see its doc comment), which is all this gateway needs to do too.
 }
 #endif

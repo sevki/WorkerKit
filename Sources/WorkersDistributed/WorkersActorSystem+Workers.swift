@@ -301,7 +301,22 @@ extension WorkersActorSystem {
         if let error {
             reply["error"] = .string(error)
         }
-        return JSObject.global.JSON.object!.stringify!(reply).string ?? "{}"
+        // `JSON.stringify` throws on a BigInt outright — not just beyond
+        // ±2^53 like every other numeric type it rounds, at any magnitude
+        // — and `JSValueEncoder` always encodes Int64/UInt64 as BigInt, so
+        // a result or error containing one would otherwise fail to reply
+        // at all. A replacer function runs before that type check, so
+        // converting BigInt to Number here (JSON.stringify calls it for
+        // every property, at any depth) avoids the throw and falls back to
+        // this call's own already-documented ±2^53 precision caveat
+        // instead.
+        let replacer = JSClosure { arguments -> JSValue in
+            guard arguments.count > 1 else { return .undefined }
+            guard case .bigInt = arguments[1] else { return arguments[1] }
+            return JSObject.global.Number!(arguments[1])
+        }
+        defer { replacer.release() }
+        return JSObject.global.JSON.object!.stringify!(reply, replacer).string ?? "{}"
     }
 }
 

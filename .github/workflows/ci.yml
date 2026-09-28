@@ -12,7 +12,14 @@ jobs:
   swift:
     name: Swift tests and worker-build
     runs-on: ubuntu-24.04
-    container: swift:6.4
+    # -noble specifically (not the default swift:6.4, which is newer than
+    # this job's own ubuntu-24.04 host and, worse, newer than the e2e
+    # job's ubuntu-24.04 runner): a HelloWorkerCLI built against the
+    # default image's glibc failed on the e2e runner with "version
+    # `GLIBC_2.43' not found" even with the runtime .so's bundled below,
+    # since bundling a .so doesn't bundle the glibc it was linked against.
+    # noble matches ubuntu-24.04's own glibc.
+    container: swift:6.4-noble
     steps:
       - uses: actions/checkout@v4
 
@@ -24,17 +31,17 @@ jobs:
       # job below so its native-CLI tests (Tests/e2e/worker.test.mjs)
       # stop skipping in CI, matching what already runs locally.
       #
-      # This job runs in the swift:6.4 container, but e2e runs on a plain
-      # ubuntu-24.04 runner (it needs direct access to the host's Docker
-      # daemon for celld, which a container job doesn't get) with no
-      # Swift runtime installed - a dynamically-linked binary fails there
-      # with "error while loading shared libraries: libswiftDistributed.so".
-      # The Static Linux SDK (musl-based) would avoid this with a fully
-      # static binary, but JavaScriptKit 0.59.0 (pinned) has no Musl
-      # support in ThreadLocal.swift and gets pulled into that build
-      # regardless of --product scoping, so that route is blocked for
-      # now. Instead, bundle the runtime .so's this binary needs and
-      # point the e2e job at them with LD_LIBRARY_PATH.
+      # This job runs in the swift:6.4-noble container, but e2e runs on a
+      # plain ubuntu-24.04 runner (it needs direct access to the host's
+      # Docker daemon for celld, which a container job doesn't get) with
+      # no Swift runtime installed - a dynamically-linked binary fails
+      # there with "error while loading shared libraries:
+      # libswiftDistributed.so". The Static Linux SDK (musl-based) would
+      # avoid this with a fully static binary, but JavaScriptKit 0.59.0
+      # (pinned) has no Musl support in ThreadLocal.swift and gets pulled
+      # into that build regardless of --product scoping, so that route is
+      # blocked for now. Instead, bundle the runtime .so's this binary
+      # needs and point the e2e job at them with LD_LIBRARY_PATH.
       - name: swift build HelloWorkerCLI
         run: swift build --product HelloWorkerCLI
 

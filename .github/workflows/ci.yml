@@ -23,8 +23,15 @@ jobs:
       # test` above doesn't build it - built here and handed to the e2e
       # job below so its native-CLI tests (Tests/e2e/worker.test.mjs)
       # stop skipping in CI, matching what already runs locally.
+      # --static-swift-stdlib: this job runs in the swift:6.3 container,
+      # but e2e runs on a plain ubuntu-24.04 runner (it needs direct
+      # access to the host's Docker daemon for celld, which a container
+      # job doesn't get) with no Swift runtime installed at all - a
+      # dynamically-linked binary fails there with "error while loading
+      # shared libraries: libswiftDistributed.so: cannot open shared
+      # object file".
       - name: swift build HelloWorkerCLI
-        run: swift build --product HelloWorkerCLI
+        run: swift build --product HelloWorkerCLI --static-swift-stdlib
 
       - uses: actions/upload-artifact@v4
         with:

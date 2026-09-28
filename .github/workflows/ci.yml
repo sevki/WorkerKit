@@ -19,6 +19,19 @@ jobs:
       - name: swift test
         run: swift test
 
+      # HelloWorkerCLI isn't a dependency of any test target, so `swift
+      # test` above doesn't build it - built here and handed to the e2e
+      # job below so its native-CLI tests (Tests/e2e/worker.test.mjs)
+      # stop skipping in CI, matching what already runs locally.
+      - name: swift build HelloWorkerCLI
+        run: swift build --product HelloWorkerCLI
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hello-worker-cli
+          path: .build/debug/HelloWorkerCLI
+          if-no-files-found: error
+
       - name: Install the Swift SDK for WebAssembly that matches the toolchain
         run: |
           apt-get update -q && apt-get install -y -q --no-install-recommends curl ca-certificates
@@ -126,10 +139,18 @@ jobs:
           name: worker
           path: build/worker
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: hello-worker-cli
+          path: .build/debug
+
+      - run: chmod +x .build/debug/HelloWorkerCLI
+
       - name: Run the Swift worker in workerd and celld
         env:
           E2E_RUNTIMES: workerd,celld
           WORKER_DIR: build/worker
+          HELLO_CLI: .build/debug/HelloWorkerCLI
         run: npm run test:e2e
 
   deploy-dry-run:

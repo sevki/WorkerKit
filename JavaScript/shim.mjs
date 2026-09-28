@@ -190,7 +190,8 @@ function ensureStarted() {
 }
 
 // Called by the Durable Object classes that `worker-build` appends to this
-// module: creates the Swift object and returns its fetch/alarm/rpc entry points.
+// module: creates the Swift object and returns its fetch/alarm/WebSocket/rpc
+// entry points.
 async function __workersSwiftDurableObject(name, ctx, env) {
   await ensureStarted();
   const factory = globalThis.__workersSwiftDurableObjects?.[name];
@@ -201,6 +202,10 @@ async function __workersSwiftDurableObject(name, ctx, env) {
   return {
     fetch: (request) => flushingConsole(() => object.fetch(request)),
     alarm: () => flushingConsole(() => object.alarm()),
+    webSocketMessage: (ws, message) => flushingConsole(() => object.webSocketMessage(ws, message)),
+    webSocketClose: (ws, code, reason, wasClean) =>
+      flushingConsole(() => object.webSocketClose(ws, code, reason, wasClean)),
+    webSocketError: (ws, error) => flushingConsole(() => object.webSocketError(ws, error)),
     rpc: (method, args) => flushingConsole(() => object.rpc(method, args)),
   };
 }

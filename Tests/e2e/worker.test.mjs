@@ -4,20 +4,27 @@
 //
 //   WORKER_DIR    directory holding the built worker (default: build/worker).
 //                 When it is set, a missing build fails instead of skipping.
+//   HELLO_CLI     the native HelloWorkerCLI binary (default:
+//                 .build/debug/HelloWorkerCLI, from `swift build`); its
+//                 tests skip when it is missing.
 //   E2E_RUNTIMES  see harness.mjs.
 
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { runtimes, serve } from "./harness.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const workerDirectory = resolve(root, process.env.WORKER_DIR ?? "build/worker");
 const built = existsSync(join(workerDirectory, "WorkersSwift.wasm"));
+const cli = resolve(root, process.env.HELLO_CLI ?? ".build/debug/HelloWorkerCLI");
+const cliSkip = !existsSync(cli) && `no HelloWorkerCLI at ${cli}; run swift build`;
 
 for (const runtime of runtimes) {
   const skip = !built && !process.env.WORKER_DIR
@@ -32,7 +39,10 @@ for (const runtime of runtimes) {
         "WorkersSwift.wasm": await readFile(join(workerDirectory, "WorkersSwift.wasm")),
       }, "WorkersSwift.wasm", {
         vars: { GREETING: "hello from env" },
-        durableObjects: { COUNTER: "Counter", FORKS: "ForkObject", PHILOSOPHERS: "PhilosopherObject" },
+        durableObjects: {
+          COUNTER: "Counter", FORKS: "ForkObject", PHILOSOPHERS: "PhilosopherObject", ECHO: "EchoSocket",
+          RPCGATEWAY: "RPCGateway",
+        },
         kvNamespaces: { KV: "workers-swift-e2e-kv" },
         selfBinding: "SELF",
       });
@@ -164,6 +174,44 @@ for (const runtime of runtimes) {
       assert.equal(second.body, "2");
     });
 
+    test("Durable Object WebSocket hibernation: acceptWebSocket + webSocketMessage echoes with an attachment-backed counter", async () => {
+      const url = new URL(server.baseURL);
+      url.protocol = "ws:";
+      url.pathname = "/ws/echo";
+      const socket = new WebSocket(url);
+      const messages = [];
+      socket.addEventListener("message", (event) => messages.push(event.data));
+
+      await new Promise((resolveOpen, reject) => {
+        socket.addEventListener("open", resolveOpen, { once: true });
+        socket.addEventListener("error", reject, { once: true });
+      });
+
+      async function waitForMessage(index) {
+        const deadline = Date.now() + 5_000;
+        while (messages.length <= index && Date.now() < deadline) {
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
+        }
+        assert.ok(messages.length > index, `no message #${index} within 5s, got ${JSON.stringify(messages)}`);
+        return messages[index];
+      }
+
+      socket.send("hello");
+      assert.equal(await waitForMessage(0), "1: hello");
+
+      // The running count comes from WebSocket.serializeAttachment/
+      // deserializeAttachment, not a Swift instance variable — proof the
+      // attachment itself round-trips, which is what would keep it correct
+      // across a real hibernation eviction between messages.
+      socket.send("again");
+      assert.equal(await waitForMessage(1), "2: again");
+
+      await new Promise((resolveClose) => {
+        socket.addEventListener("close", resolveClose, { once: true });
+        socket.close(1000, "done");
+      });
+    });
+
     test("distributed actor over Workers RPC: Doubler.double(_:) through SELF", async () => {
       const result = await request("/distributed/double/21");
       assertNotCrashed(result, "/distributed/double/21");
@@ -197,6 +245,21 @@ for (const runtime of runtimes) {
       assertNotCrashed(result, "/distributed/dog");
       assert.equal(result.response.status, 200);
       assert.equal(result.body, "Rex is a Labrador");
+    });
+
+    // The native CLI and the wasm worker are separately compiled binaries:
+    // these only pass if both mangle Doubler's distributed methods the same.
+    async function runCLI(...args) {
+      const { stdout } = await promisify(execFile)(cli, [server.baseURL, ...args], { timeout: 10_000 });
+      return stdout.trim();
+    }
+
+    test("native CLI: Doubler.double(_:) from a separate host binary", { skip: cliSkip }, async () => {
+      assert.equal(await runCLI("double", "21"), "42");
+    });
+
+    test("native CLI: generic Doubler.echo(_:) from a separate host binary", { skip: cliSkip }, async () => {
+      assert.equal(await runCLI("echo", "hello from the CLI"), "hello from the CLI");
     });
 
     test("dining philosophers: one concurrent round never deadlocks", async () => {

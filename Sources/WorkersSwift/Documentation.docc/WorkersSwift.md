@@ -39,6 +39,10 @@ away from any Web or Workers API the library does not wrap yet.
 - ``Event(_:)``
 - ``WorkerEvent``
 
+### Tutorials
+
+- <doc:RPCGatewayTutorials>
+
 ### Requests and responses
 
 - ``Request``
@@ -68,13 +72,6 @@ away from any Web or Workers API the library does not wrap yet.
 - ``Fetcher``
 - ``RPCStub``
 - ``FetchResponse``
-
-### Distributed actors
-
-- ``WorkersActorSystem``
-- ``WorkersInvocationEncoder``
-- ``WorkersInvocationDecoder``
-- ``WorkersInvocationResultHandler``
 
 ### KV
 

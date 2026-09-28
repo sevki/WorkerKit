@@ -12,18 +12,77 @@ jobs:
   swift:
     name: Swift tests and worker-build
     runs-on: ubuntu-24.04
-    container: swift:6.3
+    # -noble specifically (not the default swift:6.4, which is newer than
+    # this job's own ubuntu-24.04 host and, worse, newer than the e2e
+    # job's ubuntu-24.04 runner): a HelloWorkerCLI built against the
+    # default image's glibc failed on the e2e runner with "version
+    # `GLIBC_2.43' not found" even with the runtime .so's bundled below,
+    # since bundling a .so doesn't bundle the glibc it was linked against.
+    # noble matches ubuntu-24.04's own glibc.
+    container: swift:6.4-noble
     steps:
       - uses: actions/checkout@v4
 
       - name: swift test
         run: swift test
 
+      # HelloWorkerCLI isn't a dependency of any test target, so `swift
+      # test` above doesn't build it - built here and handed to the e2e
+      # job below so its native-CLI tests (Tests/e2e/worker.test.mjs)
+      # stop skipping in CI, matching what already runs locally.
+      #
+      # This job runs in the swift:6.4-noble container, but e2e runs on a
+      # plain ubuntu-24.04 runner (it needs direct access to the host's
+      # Docker daemon for celld, which a container job doesn't get) with
+      # no Swift runtime installed - a dynamically-linked binary fails
+      # there with "error while loading shared libraries:
+      # libswiftDistributed.so". The Static Linux SDK (musl-based) would
+      # avoid this with a fully static binary, but JavaScriptKit 0.59.0
+      # (pinned) has no Musl support in ThreadLocal.swift and gets pulled
+      # into that build regardless of --product scoping, so that route is
+      # blocked for now. Instead, bundle the runtime .so's this binary
+      # needs and point the e2e job at them with LD_LIBRARY_PATH.
+      #
+      # --build-system native: SwiftPM 6.4 defaults to the new `swiftbuild`
+      # backend, which segfaults during planning on Linux - a known,
+      # already-filed libdispatch use-after-free in DispatchIO's epoll
+      # handling (swiftlang/swift-build#1786, root cause in
+      # swiftlang/swift-corelibs-libdispatch#949), not anything in this
+      # package. Force the older backend to avoid it.
+      - name: swift build HelloWorkerCLI
+        run: swift build --product HelloWorkerCLI --build-system native
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hello-worker-cli
+          path: .build/debug/HelloWorkerCLI
+          if-no-files-found: error
+
+      - name: Bundle the Swift runtime for the e2e job's Docker-only, no-Swift runner
+        run: |
+          mkdir -p swift-runtime-libs
+          cp /usr/lib/swift/linux/*.so swift-runtime-libs/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swift-runtime-libs
+          path: swift-runtime-libs
+          if-no-files-found: error
+
+      # download.swift.org's release tag doesn't reliably match `swift
+      # --version`'s own output: 6.3's initial release is tagged
+      # swift-6.3-RELEASE (no patch digit) on both sides, but 6.4's
+      # initial release is tagged swift-6.4.0-RELEASE on download.swift.org
+      # while `swift --version` in the swift:6.4 image reports just "6.4"
+      # - so parsing `swift --version` picks swift-6.4-RELEASE, which
+      # 404s. Pin the tag explicitly instead, alongside the `container:`
+      # line above - bump both together.
       - name: Install the Swift SDK for WebAssembly that matches the toolchain
+        env:
+          SWIFT_RELEASE_TAG: swift-6.4.0-RELEASE
         run: |
           apt-get update -q && apt-get install -y -q --no-install-recommends curl ca-certificates
-          tag=$(swift --version 2>&1 | grep -o 'swift-[0-9.]*-RELEASE' | head -n 1)
-          test -n "$tag"
+          tag="$SWIFT_RELEASE_TAG"
           lower=$(echo "$tag" | tr '[:upper:]' '[:lower:]')
           curl -fsSL -o /tmp/wasm-sdk.artifactbundle.tar.gz \
             "https://download.swift.org/${lower}/wasm-sdk/${tag}/${tag}_wasm.artifactbundle.tar.gz"
@@ -60,7 +119,7 @@ jobs:
   docs:
     name: DocC documentation
     runs-on: ubuntu-24.04
-    container: swift:6.3
+    container: swift:6.4
     steps:
       - uses: actions/checkout@v4
 
@@ -126,10 +185,30 @@ jobs:
           name: worker
           path: build/worker
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: hello-worker-cli
+          path: .build/debug
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: swift-runtime-libs
+          path: swift-runtime-libs
+
+      # This runner has no Swift toolchain at all (it needs direct access
+      # to the host's Docker daemon for celld, which the swift:6.4
+      # container job doesn't get), so HelloWorkerCLI is dynamically
+      # linked against the runtime .so's bundled above via
+      # LD_LIBRARY_PATH. Artifact transport also strips the executable
+      # bit, hence the chmod.
+      - run: chmod +x .build/debug/HelloWorkerCLI
+
       - name: Run the Swift worker in workerd and celld
         env:
           E2E_RUNTIMES: workerd,celld
           WORKER_DIR: build/worker
+          HELLO_CLI: .build/debug/HelloWorkerCLI
+          LD_LIBRARY_PATH: ${{ github.workspace }}/swift-runtime-libs
         run: npm run test:e2e
 
   deploy-dry-run:

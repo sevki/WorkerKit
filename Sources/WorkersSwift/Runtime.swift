@@ -82,6 +82,44 @@ public enum WorkersRuntime {
                     }
                 }.jsValue
             })
+            entryPoints["webSocketMessage"] = .object(JSClosure { arguments in
+                let ws = WebSocket(arguments[0].object!)
+                let message = WebSocketMessage(arguments[1])
+                return JSPromise.async { () async throws(JSException) -> JSValue in
+                    do {
+                        try await object.webSocketMessage(ws, message)
+                        return .undefined
+                    } catch {
+                        throw (error as? JSException) ?? JSException(message: "\(error)")
+                    }
+                }.jsValue
+            })
+            entryPoints["webSocketClose"] = .object(JSClosure { arguments in
+                let ws = WebSocket(arguments[0].object!)
+                let code = Int(arguments.count > 1 ? arguments[1].number ?? 1000 : 1000)
+                let reason = arguments.count > 2 ? arguments[2].string ?? "" : ""
+                let wasClean = arguments.count > 3 ? arguments[3].boolean ?? false : false
+                return JSPromise.async { () async throws(JSException) -> JSValue in
+                    do {
+                        try await object.webSocketClose(ws, code: code, reason: reason, wasClean: wasClean)
+                        return .undefined
+                    } catch {
+                        throw (error as? JSException) ?? JSException(message: "\(error)")
+                    }
+                }.jsValue
+            })
+            entryPoints["webSocketError"] = .object(JSClosure { arguments in
+                let ws = WebSocket(arguments[0].object!)
+                let error = JSException(message: arguments.count > 1 ? "\(arguments[1])" : "WebSocket error")
+                return JSPromise.async { () async throws(JSException) -> JSValue in
+                    do {
+                        try await object.webSocketError(ws, error)
+                        return .undefined
+                    } catch {
+                        throw (error as? JSException) ?? JSException(message: "\(error)")
+                    }
+                }.jsValue
+            })
             entryPoints["rpc"] = .object(JSClosure { arguments in
                 let method = arguments[0].string ?? ""
                 let rpcArguments = arguments.count > 1 ? JSArray(arguments[1].object!)?.map { $0 } ?? [] : []

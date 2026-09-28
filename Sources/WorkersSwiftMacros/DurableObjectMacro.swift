@@ -55,7 +55,10 @@ public struct DurableObjectMacro: PeerMacro, MemberMacro, ExtensionMacro {
         // The generated JavaScript class defines these methods itself, and
         // its DurableObject base class sets `ctx` and `env` as instance
         // fields, which would hide methods of the same name.
-        if let reserved = rpcMethods.first(where: { ["constructor", "fetch", "alarm", "ctx", "env"].contains($0.name.text) }) {
+        let reservedNames = [
+            "constructor", "fetch", "alarm", "webSocketMessage", "webSocketClose", "webSocketError", "ctx", "env",
+        ]
+        if let reserved = rpcMethods.first(where: { reservedNames.contains($0.name.text) }) {
             throw MacroExpansionErrorMessage("@RPC method \(reserved.name.text) clashes with the Durable Object class's own \(reserved.name.text)")
         }
 

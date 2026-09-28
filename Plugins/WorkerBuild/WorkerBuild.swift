@@ -285,6 +285,18 @@ struct WorkerBuild: CommandPlugin {
                     return (await this.#swift).alarm();
                   }
 
+                  async webSocketMessage(ws, message) {
+                    return (await this.#swift).webSocketMessage(ws, message);
+                  }
+
+                  async webSocketClose(ws, code, reason, wasClean) {
+                    return (await this.#swift).webSocketClose(ws, code, reason, wasClean);
+                  }
+
+                  async webSocketError(ws, error) {
+                    return (await this.#swift).webSocketError(ws, error);
+                  }
+
                 """
             for method in methods {
                 source += """

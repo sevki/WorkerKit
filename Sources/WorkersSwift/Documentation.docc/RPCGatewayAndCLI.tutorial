@@ -1,0 +1,156 @@
+@Tutorial(time: 20) {
+    @Intro(title: "Call a Worker's Distributed Actor from a Native CLI") {
+        `WorkersActorSystem` backs a `distributed actor` with Workers RPC
+        inside a worker, and with a plain WebSocket everywhere else — the
+        same actor declaration compiles, and mangles, identically for both,
+        so a native process (a CLI, a server, a test) can call a worker's
+        distributed actors exactly the way another worker would.
+
+        This tutorial builds a worker that hosts one `Greeter` actor, adds
+        `RPCGateway` so a native process can reach it, and writes a
+        command-line tool that calls it.
+    }
+
+    @Section(title: "Share a distributed actor") {
+        @ContentAndMedia {
+            The actor declaration lives in a small library target that both
+            the worker and the CLI depend on, so both binaries compile —
+            and mangle — it identically.
+        }
+
+        @Steps {
+            @Step {
+                Create a new Swift package with a library target for the
+                shared actor code, depending on `WorkersDistributed` — the
+                one module with both the worker-side (Workers RPC) and
+                native (WebSocket) transports behind the same
+                `WorkersActorSystem` type.
+
+                @Code(name: "Package.swift", file: "02-package-shared-target.swift")
+            }
+
+            @Step {
+                Declare `Greeter` as a `distributed actor` with
+                `WorkersActorSystem` as its actor system, and give it one
+                `distributed func`.
+
+                @Code(name: "GreeterKit/Greeter.swift", file: "01-greeter-actor.swift")
+            }
+        }
+    }
+
+    @Section(title: "Host the actor in the worker") {
+        @ContentAndMedia {
+            A worker that hosts a distributed actor for native callers to
+            reach hosts it as a singleton — one instance for the whole
+            worker, reached through a fixed `WorkersActorSystem` — because
+            `RPCGateway`'s relay always calls the worker's own fixed RPC
+            entry point, not a particular Durable Object.
+        }
+
+        @Steps {
+            @Step {
+                Add the worker executable target, depending on the shared
+                `GreeterKit` target plus `WorkersSwift` and
+                `WorkersDistributed`.
+
+                @Code(name: "Package.swift", file: "04-package-worker-target.swift")
+            }
+
+            @Step {
+                In the worker, construct the actor eagerly and host it on a
+                `WorkersActorSystem`, then forward the one fixed RPC entry
+                point every `WorkersActorSystem` call arrives through —
+                named exactly `__workersSwiftDistributedCall` — to
+                `receive(identifier:arguments:genericSubstitutions:)`.
+
+                @Code(name: "GreeterWorker/Worker.swift", file: "03-worker-host-actor.swift")
+            }
+        }
+    }
+
+    @Section(title: "Expose it through the RPC gateway") {
+        @ContentAndMedia {
+            `RPCGateway` is a library Durable Object that serves a
+            hibernatable WebSocket and relays each call it receives, as
+            JSON, to the worker's `__workersSwiftDistributedCall` through
+            its own `SELF` service binding — it hosts nothing itself, so
+            the same gateway works for any worker that hosts a
+            `WorkersActorSystem` singleton this way.
+        }
+
+        @Steps {
+            @Step {
+                Route `WorkersActorSystem.gatewayPath` to a fresh
+                `RPCGateway` instance per connection, so connections don't
+                queue through one object.
+
+                @Code(name: "GreeterWorker/Worker.swift", file: "05-worker-fetch-route.swift")
+            }
+
+            @Step {
+                Bind `RPCGateway` as a Durable Object, and bind the worker
+                to itself as `SELF` — the gateway relays through that
+                binding.
+
+                @Code(name: "wrangler.jsonc", file: "06-wrangler.jsonc")
+            }
+        }
+    }
+
+    @Section(title: "Call it from a native CLI") {
+        @ContentAndMedia {
+            The CLI depends on the same `GreeterKit` target as the worker,
+            and nothing else worker-specific — `WorkersActorSystem(worker:)`
+            opens the WebSocket to the gateway, and from there `Greeter`
+            is called exactly like any other distributed actor.
+        }
+
+        @Steps {
+            @Step {
+                Add a second executable target for the CLI, depending on
+                `GreeterKit` and `WorkersDistributed`.
+
+                @Code(name: "Package.swift", file: "07-package-cli-target.swift")
+            }
+
+            @Step {
+                Open a `WorkersActorSystem` to the worker's URL, resolve
+                `Greeter`, and call it. `close()`/`wait()` let a short-lived
+                CLI exit only once the WebSocket's closing handshake is
+                done.
+
+                @Code(name: "GreeterCLI/main.swift", file: "08-cli-main.swift")
+            }
+        }
+    }
+
+    @Section(title: "Run it") {
+        @ContentAndMedia {
+            Build the worker's wasm binary, start it (locally with
+            `wrangler dev`, or deployed), then run the CLI against it.
+        }
+
+        @Steps {
+            @Step {
+                Build the worker into a Wasm module and JavaScript shim.
+                `--product` picks `GreeterWorkerWasm` out of the two
+                executables the package now defines.
+
+                @Code(name: "Terminal", file: "09-run-build.sh")
+            }
+
+            @Step {
+                Start the worker locally with `wrangler dev`.
+
+                @Code(name: "Terminal", file: "10-run-dev.sh")
+            }
+
+            @Step {
+                Run the CLI against it — this prints `Hello, world!`.
+
+                @Code(name: "Terminal", file: "11-run-cli.sh")
+            }
+        }
+    }
+}

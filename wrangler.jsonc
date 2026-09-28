@@ -17,7 +17,7 @@
 // Until that's created (`wrangler kv namespace create workers-swift-example-KV`)
 // and its id filled in below, the KV binding is omitted — /kv, /kv/<key>
 // and /kv-bytes will 500, everything else (/, /dining/*, /distributed/*,
-// /counter/*, /rpc/add) works.
+// /counter/*, /rpc/add, /ws/echo, and the distributed-actor gateway) works.
 {
 	"name": "swift",
 	"main": "build/worker/worker.mjs",
@@ -30,11 +30,18 @@
 		"bindings": [
 			{ "name": "COUNTER", "class_name": "Counter" },
 			{ "name": "FORKS", "class_name": "ForkObject" },
-			{ "name": "PHILOSOPHERS", "class_name": "PhilosopherObject" }
+			{ "name": "PHILOSOPHERS", "class_name": "PhilosopherObject" },
+			{ "name": "ECHO", "class_name": "EchoSocket" },
+			// WorkersDistributed's gateway for native callers (served at
+			// WorkersActorSystem.gatewayPath). It
+			// stores nothing; SQLite-backed only because that's the kind
+			// every plan supports.
+			{ "name": "RPCGATEWAY", "class_name": "RPCGateway" }
 		]
 	},
 	"migrations": [
-		{ "tag": "v1", "new_sqlite_classes": ["Counter", "ForkObject", "PhilosopherObject"] }
+		{ "tag": "v1", "new_sqlite_classes": ["Counter", "ForkObject", "PhilosopherObject"] },
+		{ "tag": "v2", "new_sqlite_classes": ["EchoSocket", "RPCGateway"] }
 	],
 	"services": [
 		{ "binding": "SELF", "service": "swift" }

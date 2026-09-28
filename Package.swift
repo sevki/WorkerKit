@@ -13,10 +13,23 @@ let package = Package(
             name: "WorkersSwift",
             targets: ["WorkersSwift"]
         ),
+        // `WorkersActorSystem`: one type for distributed actors, backed by
+        // Workers RPC inside a worker and by a WebSocket everywhere else.
+        .library(
+            name: "WorkersDistributed",
+            targets: ["WorkersDistributed"]
+        ),
         // An example worker; `swift package worker-build` links it into WorkersSwift.wasm.
         .executable(
             name: "WorkersSwiftWasm",
             targets: ["WorkersSwiftWasm"]
+        ),
+        // A native CLI that calls HelloWorker's Doubler distributed actor
+        // over plain WebSocket/JSON — run it with `swift run HelloWorkerCLI
+        // <ws-url>`, once the worker is serving.
+        .executable(
+            name: "HelloWorkerCLI",
+            targets: ["HelloWorkerCLI"]
         ),
         .plugin(
             name: "WorkerBuild",
@@ -29,6 +42,12 @@ let package = Package(
         .package(url: "https://github.com/swiftwasm/JavaScriptKit.git", from: "0.59.0"),
         // `swift package generate-documentation` / `swift package --disable-sandbox preview-documentation`.
         .package(url: "https://github.com/swiftlang/swift-docc-plugin.git", from: "1.4.0"),
+        // WorkersDistributed's native transport: a real RFC 6455 client
+        // that works on Linux, unlike swift-corelibs-foundation's
+        // URLSessionWebSocketTask (libcurl-backed there, and libcurl has no
+        // WebSocket support at all).
+        .package(url: "https://github.com/hummingbird-project/swift-websocket.git", from: "1.6.0"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.6.0"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -49,17 +68,40 @@ let package = Package(
                 .product(name: "JavaScriptBigIntSupport", package: "JavaScriptKit"),
             ]
         ),
+        // The one place the platform matters: each dependency is only needed
+        // by the transport for its own platform.
+        .target(
+            name: "WorkersDistributed",
+            dependencies: [
+                .target(name: "WorkersSwift", condition: .when(platforms: [.wasi])),
+                .product(name: "JavaScriptKit", package: "JavaScriptKit", condition: .when(platforms: [.wasi])),
+                .product(name: "WSClient", package: "swift-websocket", condition: .when(platforms: [.macOS, .linux])),
+                .product(name: "Logging", package: "swift-log", condition: .when(platforms: [.macOS, .linux])),
+            ]
+        ),
+        // The distributed actors HelloWorker hosts and HelloWorkerCLI calls.
+        .target(
+            name: "HelloWorkerActors",
+            dependencies: ["WorkersDistributed"]
+        ),
         // The example worker; WorkersSwiftWasm links it into WorkersSwift.wasm.
         .target(
             name: "HelloWorker",
             dependencies: [
                 "WorkersSwift",
+                "WorkersDistributed",
+                "HelloWorkerActors",
                 .product(name: "JavaScriptKit", package: "JavaScriptKit"),
             ]
         ),
+        // A worker only runs as wasm, so the host build leaves it out.
         .executableTarget(
             name: "WorkersSwiftWasm",
-            dependencies: ["HelloWorker"]
+            dependencies: [.target(name: "HelloWorker", condition: .when(platforms: [.wasi]))]
+        ),
+        .executableTarget(
+            name: "HelloWorkerCLI",
+            dependencies: ["HelloWorkerActors", "WorkersDistributed"]
         ),
         .plugin(
             name: "WorkerBuild",

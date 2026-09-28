@@ -123,9 +123,11 @@ When a worker has top-level `@RPC` functions, `worker-build` makes its default e
 
 ## Distributed actors over Workers RPC
 
-`WorkersActorSystem` backs Swift's `distributed actor` with the same `@RPC`/`RPCStub` transport above, instead of a hand-written stub:
+`WorkersActorSystem` (from the `WorkersDistributed` library) backs Swift's `distributed actor` with the same `@RPC`/`RPCStub` transport above, instead of a hand-written stub:
 
 ```swift
+import WorkersDistributed
+
 distributed actor Greeter {
     typealias ActorSystem = WorkersActorSystem
 
@@ -160,6 +162,7 @@ let greeting = try await greeter.hello("world")
 
 - A `distributed func`'s mangled identifier is never interpreted by this library — it's passed through opaquely to `executeDistributedTarget`, the same Swift runtime mechanism that resolves it on every other platform. Generic `distributed func`s work too, the same way.
 - `WorkersActorSystem(stub:)` + `host(_:)` back one singleton actor per worker, as above. `WorkersActorSystem(durableObjects:)` + `host(_:as:)` instead back one distributed actor instance per Durable Object id, routed dynamically per call — see the [Distributed actors article](https://sevki.github.io/workers-swift/documentation/workersswift/distributedactors) (or `Sources/HelloWorker/Worker.swift`'s `Fork`/`Philosopher` dining-philosophers example) for that case.
+- Outside a worker, the same `WorkersActorSystem` type talks JSON over a WebSocket instead: `WorkersActorSystem(worker: URL(string: "https://…")!)`, served by the library's `RPCGateway` Durable Object at `WorkersActorSystem.gatewayPath`. Declare an actor once in a module both the worker and a native tool depend on, and the tool calls it with the same `Greeter.resolve(id:using:)` — see `Sources/HelloWorkerActors` and `Sources/HelloWorkerCLI`.
 - See [`rfcs/distributed-actor-rpc.md`](rfcs/distributed-actor-rpc.md) for the full design discussion.
 
 ## Repository layout

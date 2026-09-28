@@ -312,7 +312,7 @@ extension WorkersActorSystem {
         // instead.
         let replacer = JSClosure { arguments -> JSValue in
             guard arguments.count > 1 else { return .undefined }
-            guard case .bigInt = arguments[1] else { return arguments[1] }
+            guard arguments[1].bigInt != nil else { return arguments[1] }
             return JSObject.global.Number!(arguments[1])
         }
         defer { replacer.release() }

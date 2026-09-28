@@ -132,9 +132,40 @@ jobs:
           WORKER_DIR: build/worker
         run: npm run test:e2e
 
+  deploy-dry-run:
+    name: Cloudflare Workers deploy dry-run
+    needs: swift
+    # deploy-example only ever runs on push to main, so a config mistake
+    # there (like the wrangler-action default-version bug that made the
+    # first real deploy fail - see PR #10) only surfaces after a merge,
+    # never on the PR that introduced it. This job mirrors deploy-example
+    # exactly except for the trailing --dry-run, and runs on every PR: a
+    # dry run parses the exact same config and resolves the exact same
+    # entry point without ever calling the Cloudflare API (no state is
+    # touched), so it reproduces that class of failure before merge, not
+    # after. Not gated behind CLOUDFLARE_DEPLOY_ENABLED, since it can't
+    # deploy anything - only gated on the token secret actually existing,
+    # so this doesn't fail every PR before Cloudflare credentials exist.
+    if: secrets.CLOUDFLARE_API_TOKEN != ''
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: worker
+          path: build/worker
+
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4"
+          command: deploy --dry-run
+
   deploy-example:
     name: Deploy the example worker to Cloudflare Workers
-    needs: [swift, e2e]
+    needs: [swift, e2e, deploy-dry-run]
     # Cloudflare Workers runs on workerd itself, so this deploys the exact
     # artifact e2e already verified against real workerd/celld. Gated on a
     # repo variable (Settings > Secrets and variables > Actions > Variables

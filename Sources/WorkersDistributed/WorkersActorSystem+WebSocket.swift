@@ -191,7 +191,13 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
         guard let result = reply.result else {
             throw RemoteCallError(message: "no result for \(target.identifier)")
         }
-        return try JSONDecoder().decode(Res.self, from: JSONSerialization.data(withJSONObject: result, options: [.fragmentsAllowed]))
+        let decoder = JSONDecoder()
+        // A result that is, or contains, a distributed actor reference
+        // needs this to resolve the encoded id back to a local stub — the
+        // same reason the worker-side transport sets it (see
+        // WorkersActorSystem+Workers.swift).
+        decoder.userInfo[.actorSystemKey] = self
+        return try decoder.decode(Res.self, from: JSONSerialization.data(withJSONObject: result, options: [.fragmentsAllowed]))
     }
 
     public func remoteCallVoid<Act, Err>(

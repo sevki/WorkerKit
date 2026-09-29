@@ -1,5 +1,5 @@
 import Distributed
-import WorkersDistributed
+import WorkerKitDistributed
 
 /// A `distributed actor` HelloWorker hosts and HelloWorkerCLI calls. Both
 /// compile this same declaration against the same `WorkersActorSystem`

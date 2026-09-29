@@ -6,7 +6,7 @@
 	"compatibility_date": "2026-01-01",
 	"durable_objects": {
 		"bindings": [
-			// WorkersDistributed's gateway for native callers, served at
+			// WorkerKitDistributed's gateway for native callers, served at
 			// WorkersActorSystem.gatewayPath.
 			{ "name": "RPCGATEWAY", "class_name": "RPCGateway" }
 		]
@@ -18,7 +18,7 @@
 	],
 	"services": [
 		// RPCGateway relays each call to this worker's own
-		// __workersSwiftDistributedCall entry point through this binding.
+		// __workerKitDistributedCall entry point through this binding.
 		{ "binding": "SELF", "service": "greeter-worker" }
 	]
 }

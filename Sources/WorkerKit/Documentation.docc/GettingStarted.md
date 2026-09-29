@@ -1,11 +1,11 @@
 # Getting Started
 
-Set up a Swift package, add `WorkersSwift`, build it to WebAssembly, and run it on workerd or celld.
+Set up a Swift package, add `WorkerKit`, build it to WebAssembly, and run it on workerd or celld.
 
 ## Add the dependency
 
 Create a Swift package (or add to an existing one) and depend on
-`WorkersSwift` and its `worker-build` plugin:
+`WorkerKit` and its `worker-build` plugin:
 
 ```swift
 // swift-tools-version: 6.3
@@ -18,12 +18,12 @@ let package = Package(
         .executable(name: "MyWorker", targets: ["MyWorker"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/sevki/workers-swift.git", branch: "main"),
+        .package(url: "https://github.com/sevki/WorkerKit.git", branch: "main"),
     ],
     targets: [
         .executableTarget(
             name: "MyWorker",
-            dependencies: [.product(name: "WorkersSwift", package: "workers-swift")]
+            dependencies: [.product(name: "WorkerKit", package: "WorkerKit")]
         ),
     ]
 )
@@ -32,7 +32,7 @@ let package = Package(
 Write your handler in `Sources/MyWorker/main.swift`:
 
 ```swift
-import WorkersSwift
+import WorkerKit
 
 @Event(.fetch)
 func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
@@ -56,7 +56,7 @@ swift package --allow-writing-to-package-directory worker-build
 This builds `MyWorker` as a WASI reactor module and writes:
 
 ```
-build/worker/worker.mjs        JavaScriptKit's runtime.mjs + the WorkersSwift shim, as one module
+build/worker/worker.mjs        JavaScriptKit's runtime.mjs + the WorkerKit shim, as one module
 build/worker/MyWorker.wasm
 ```
 

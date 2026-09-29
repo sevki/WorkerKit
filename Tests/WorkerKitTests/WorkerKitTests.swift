@@ -1,5 +1,5 @@
 import Testing
-@testable import WorkersSwift
+@testable import WorkerKit
 
 // Request, Headers, Env and Context wrap JavaScript objects, so they are
 // covered by the end-to-end tests in Tests/e2e. These tests cover the Swift

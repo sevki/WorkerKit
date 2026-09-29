@@ -4,14 +4,14 @@ Call a Durable Object, or another worker, as an ordinary Swift `distributed acto
 
 ## Overview
 
-`WorkersActorSystem`, from the `WorkersDistributed` library, backs Swift's
+`WorkersActorSystem`, from the `WorkerKitDistributed` library, backs Swift's
 `distributed actor` with the same transport ``RPC()`` already uses (an
 ``RPCStub``), instead of a new one. A
 `distributed func`'s mangled identifier is never interpreted by this
 library — it's passed through opaquely to the callee, which hands it to the
 Swift runtime's own `executeDistributedTarget`, the same mechanism that
 resolves it on every other platform. See
-[`rfcs/distributed-actor-rpc.md`](https://github.com/sevki/workers-swift/blob/main/rfcs/distributed-actor-rpc.md)
+[`rfcs/distributed-actor-rpc.md`](https://github.com/sevki/WorkerKit/blob/main/rfcs/distributed-actor-rpc.md)
 in the repository for the full design discussion.
 
 A `WorkersActorSystem` plays one of two roles, and every worker that hosts a
@@ -19,7 +19,7 @@ distributed actor needs exactly one fixed RPC entry point on the callee
 side, forwarding to `WorkersActorSystem.receive(identifier:arguments:genericSubstitutions:)`:
 
 ```swift
-@RPC func __workersSwiftDistributedCall(
+@RPC func __workerKitDistributedCall(
     _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
 ) async throws -> JSValue {
     try await system.receive(
@@ -29,7 +29,7 @@ side, forwarding to `WorkersActorSystem.receive(identifier:arguments:genericSubs
 ```
 
 The method must be named exactly `WorkersActorSystem.entryPointName`
-(`__workersSwiftDistributedCall`) — `worker-build` finds it the same way it
+(`__workerKitDistributedCall`) — `worker-build` finds it the same way it
 finds any other ``RPC()`` method, through the Wasm export it generates.
 
 A ``DurableObject()`` class that declares exactly one `WorkersActorSystem`
@@ -61,7 +61,7 @@ private let greeter: Greeter = {
     return actor
 }()
 
-@RPC func __workersSwiftDistributedCall(
+@RPC func __workerKitDistributedCall(
     _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
 ) async throws -> JSValue {
     // A top-level `let` initializes lazily, on first access — touch
@@ -118,7 +118,7 @@ final class CounterObject {
 ```
 
 `@DurableObject` sees the `hostSystem` property above and generates the
-`__workersSwiftDistributedCall` forwarder itself — write it out by hand only
+`__workerKitDistributedCall` forwarder itself — write it out by hand only
 when the class hosts more than one `WorkersActorSystem` (unambiguous
 otherwise, so the macro leaves it alone whenever there's more than one to
 choose from).

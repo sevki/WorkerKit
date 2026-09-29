@@ -1,11 +1,11 @@
-# workers-swift
+# WorkerKit
 
 Write [Workers](https://developers.cloudflare.com/workers/) in Swift, in the style of [workers-rs](https://github.com/cloudflare/workers-rs). Workers compile to WebAssembly and run on [workerd](https://github.com/cloudflare/workerd) and [denoland/celld](https://github.com/denoland/celld).
 
-📖 **[API documentation](https://sevki.github.io/workers-swift/documentation/workersswift/)**, built with DocC.
+📖 **[API documentation](https://sevki.github.io/WorkerKit/documentation/workerkit/)**, built with DocC.
 
 ```swift
-import WorkersSwift
+import WorkerKit
 
 @Event(.fetch)
 func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
@@ -22,10 +22,10 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
 
 ## How it maps to workers-rs
 
-| workers-rs | workers-swift |
+| workers-rs | WorkerKit |
 |---|---|
-| `worker` (`Request`, `Response`, `Env`, `Context`, `KvStore`, `Bucket`, `SqlStorage`, …) | `WorkersSwift` (`KVStore` for `KvStore`, `R2Bucket` for `Bucket`, `SQLStorage` for `SqlStorage`) |
-| `#[event(fetch)]` | `@Event(.fetch)` (`WorkersSwiftMacros`) |
+| `worker` (`Request`, `Response`, `Env`, `Context`, `KvStore`, `Bucket`, `SqlStorage`, …) | `WorkerKit` (`KVStore` for `KvStore`, `R2Bucket` for `Bucket`, `SQLStorage` for `SqlStorage`) |
+| `#[event(fetch)]` | `@Event(.fetch)` (`WorkerKitMacros`) |
 | `#[durable_object]` + `impl DurableObject` | `@DurableObject` class, with `@RPC` methods |
 | `wasm-bindgen`, `js-sys`, `wasm-bindgen-futures` | [JavaScriptKit](https://github.com/swiftwasm/JavaScriptKit) and JavaScriptEventLoop |
 | `worker-build` and its `shim.mjs` | `swift package worker-build` (`Plugins/WorkerBuild`) and `JavaScript/shim.mjs` |
@@ -136,10 +136,10 @@ When a worker has top-level `@RPC` functions, `worker-build` makes its default e
 
 ## Distributed actors over Workers RPC
 
-`WorkersActorSystem` (from the `WorkersDistributed` library) backs Swift's `distributed actor` with the same `@RPC`/`RPCStub` transport above, instead of a hand-written stub:
+`WorkersActorSystem` (from the `WorkerKitDistributed` library) backs Swift's `distributed actor` with the same `@RPC`/`RPCStub` transport above, instead of a hand-written stub:
 
 ```swift
-import WorkersDistributed
+import WorkerKitDistributed
 
 distributed actor Greeter {
     typealias ActorSystem = WorkersActorSystem
@@ -158,7 +158,7 @@ private let greeter: Greeter = {
     return actor
 }()
 
-@RPC func __workersSwiftDistributedCall(
+@RPC func __workerKitDistributedCall(
     _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
 ) async throws -> JSValue {
     _ = greeter // force the lazy top-level `let` to initialize
@@ -174,19 +174,19 @@ let greeting = try await greeter.hello("world")
 ```
 
 - A `distributed func`'s mangled identifier is never interpreted by this library — it's passed through opaquely to `executeDistributedTarget`, the same Swift runtime mechanism that resolves it on every other platform. Generic `distributed func`s work too, the same way.
-- `WorkersActorSystem(stub:)` + `host(_:)` back one singleton actor per worker, as above. `WorkersActorSystem(durableObjects:)` + `host(_:as:)` instead back one distributed actor instance per Durable Object id, routed dynamically per call — see the [Distributed actors article](https://sevki.github.io/workers-swift/documentation/workersswift/distributedactors) (or `Sources/HelloWorker/Worker.swift`'s `Fork`/`Philosopher` dining-philosophers example) for that case.
+- `WorkersActorSystem(stub:)` + `host(_:)` back one singleton actor per worker, as above. `WorkersActorSystem(durableObjects:)` + `host(_:as:)` instead back one distributed actor instance per Durable Object id, routed dynamically per call — see the [Distributed actors article](https://sevki.github.io/WorkerKit/documentation/workerkit/distributedactors) (or `Sources/HelloWorker/Worker.swift`'s `Fork`/`Philosopher` dining-philosophers example) for that case.
 - Outside a worker, the same `WorkersActorSystem` type talks JSON over a WebSocket instead: `WorkersActorSystem(worker: URL(string: "https://…")!)`, served by the library's `RPCGateway` Durable Object at `WorkersActorSystem.gatewayPath`. Declare an actor once in a module both the worker and a native tool depend on, and the tool calls it with the same `Greeter.resolve(id:using:)` — see `Sources/HelloWorkerActors` and `Sources/HelloWorkerCLI`.
 - See [`rfcs/distributed-actor-rpc.md`](rfcs/distributed-actor-rpc.md) for the full design discussion.
 
 ## Repository layout
 
-- `Sources/WorkersSwift`: the library.
-- `Sources/WorkersSwift/Documentation.docc`: the DocC catalog (articles and the landing page); see [Documentation](#documentation).
-- `Sources/WorkersSwiftMacros`: `@Event`.
-- `Sources/HelloWorker`: an example worker, which `Sources/WorkersSwiftWasm` links into `WorkersSwift.wasm`.
+- `Sources/WorkerKit`: the library.
+- `Sources/WorkerKit/Documentation.docc`: the DocC catalog (articles and the landing page); see [Documentation](#documentation).
+- `Sources/WorkerKitMacros`: `@Event`.
+- `Sources/HelloWorker`: an example worker, which `Sources/WorkerKitWasm` links into `WorkerKit.wasm`.
 - `Plugins/WorkerBuild`: `swift package worker-build`.
 - `JavaScript/shim.mjs`: the Worker entry point that instantiates the module and calls into Swift.
-- `Tests/WorkersSwiftTests`, `Tests/WorkersSwiftMacrosTests`: native tests (`swift test`).
+- `Tests/WorkerKitTests`, `Tests/WorkerKitMacrosTests`: native tests (`swift test`).
 - `Tests/e2e`: runs the built worker in real workerd and celld processes.
 
 ## Building
@@ -199,18 +199,18 @@ let greeting = try await greeter.hello("world")
    swift package --allow-writing-to-package-directory worker-build
    ```
 
-   The plugin builds the `WorkersSwiftWasm` product as a WASI reactor module and writes:
+   The plugin builds the `WorkerKitWasm` product as a WASI reactor module and writes:
 
    ```
    build/worker/worker.mjs        JavaScriptKit's runtime.mjs + JavaScript/shim.mjs, as one module
-   build/worker/WorkersSwift.wasm
+   build/worker/WorkerKit.wasm
    ```
 
    Options: `--swift-sdk <id>`, `--product <name>` (in your own package, the executable that holds your `@Event(.fetch)` function), `-c debug|release` (default `release`), and `--output <dir>`. On macOS, add `--disable-sandbox` if the plugin sandbox blocks the nested `swift build`.
 
 ## Running on workerd or celld
 
-Both runtimes resolve `worker.mjs`'s `import "./WorkersSwift.wasm"` to a compiled `WebAssembly.Module`.
+Both runtimes resolve `worker.mjs`'s `import "./WorkerKit.wasm"` to a compiled `WebAssembly.Module`.
 
 For [celld](https://github.com/denoland/celld) (and Wrangler), point `main` at the built worker:
 
@@ -233,7 +233,7 @@ For workerd, list both files as modules:
 ```capnp
 modules = [
   (name = "worker.mjs", esModule = embed "build/worker/worker.mjs"),
-  (name = "WorkersSwift.wasm", wasm = embed "build/worker/WorkersSwift.wasm"),
+  (name = "WorkerKit.wasm", wasm = embed "build/worker/WorkerKit.wasm"),
 ],
 ```
 
@@ -251,12 +251,12 @@ npm run test:e2e    # the built worker in workerd (after worker-build)
 
 ## Documentation
 
-The public API is documented with [DocC](https://www.swift.org/documentation/docc/) in doc comments and in `Sources/WorkersSwift/Documentation.docc`, and published at <https://sevki.github.io/workers-swift/documentation/workersswift/> on every push to `main`.
+The public API is documented with [DocC](https://www.swift.org/documentation/docc/) in doc comments and in `Sources/WorkerKit/Documentation.docc`, and published at <https://sevki.github.io/WorkerKit/documentation/workerkit/> on every push to `main`.
 
 To read it locally instead:
 
 ```bash
-swift package --disable-sandbox preview-documentation --target WorkersSwift
+swift package --disable-sandbox preview-documentation --target WorkerKit
 ```
 
 This serves the docs and opens them in your browser, rebuilding as you edit. It needs `--disable-sandbox` because the preview server binds a local port; the plugin sandboxes only that server, not your code.
@@ -265,14 +265,14 @@ To build the static site yourself, as CI does:
 
 ```bash
 swift package --allow-writing-to-directory docs \
-  generate-documentation --target WorkersSwift \
+  generate-documentation --target WorkerKit \
   --disable-indexing \
   --transform-for-static-hosting \
-  --hosting-base-path workers-swift \
+  --hosting-base-path WorkerKit \
   --output-path docs
 ```
 
-`--hosting-base-path workers-swift` matches this repository being served from `https://sevki.github.io/workers-swift/`; drop it (and adjust the links above) if you publish from a custom domain or the root of a `<user>.github.io` repository instead. CI also runs `swift package generate-documentation --target WorkersSwift --warnings-as-errors` on every pull request, so a broken `<doc:...>` link or an undocumented symbol referenced from an article fails the build before it reaches `main`.
+`--hosting-base-path WorkerKit` matches this repository being served from `https://sevki.github.io/WorkerKit/`; drop it (and adjust the links above) if you publish from a custom domain or the root of a `<user>.github.io` repository instead. CI also runs `swift package generate-documentation --target WorkerKit --warnings-as-errors` on every pull request, so a broken `<doc:...>` link or an undocumented symbol referenced from an article fails the build before it reaches `main`.
 
 ### Publishing to GitHub Pages
 

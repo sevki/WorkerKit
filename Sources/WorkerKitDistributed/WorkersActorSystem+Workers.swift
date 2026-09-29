@@ -1,7 +1,7 @@
 #if arch(wasm32)
 import Distributed
 import JavaScriptKit
-import WorkersSwift
+import WorkerKit
 
 /// A `DistributedActorSystem` backed by Workers RPC — this is the wasm32
 /// implementation, for code running inside a worker. A native process gets
@@ -56,7 +56,7 @@ import WorkersSwift
 ///     let calleeSystem = WorkersActorSystem()
 ///     calleeSystem.host(Doubler(actorSystem: calleeSystem))
 ///
-///     @RPC func __workersSwiftDistributedCall(
+///     @RPC func __workerKitDistributedCall(
 ///         _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
 ///     ) async throws -> JSValue {
 ///         try await calleeSystem.receive(
@@ -77,7 +77,7 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
     /// The fixed RPC method name every `WorkersActorSystem` call goes
     /// through, on both sides. Mark exactly one top-level function `@RPC`
     /// with this name per worker that hosts a distributed actor.
-    public static let entryPointName = "__workersSwiftDistributedCall"
+    public static let entryPointName = "__workerKitDistributedCall"
 
     /// How a caller-side system reaches a remote actor: either always the
     /// same stub (the singleton case), or a `DurableObjectNamespace` stub

@@ -5,7 +5,7 @@ open questions to reviewers before any code lands.
 
 ## Motivation
 
-`workers-swift` currently exposes cross-binding RPC through `@RPC` /
+`WorkerKit` currently exposes cross-binding RPC through `@RPC` /
 `RPCStub`: a method is marked `@RPC`, the macro registers it under its plain
 name, and `worker-build` wires that name into the generated JS shim's
 dispatch table. It works, but it's hand-rolled — every RPC-callable method
@@ -13,7 +13,7 @@ needs the attribute, a stub type, and a string-keyed dispatch.
 
 Swift's `distributed actor` gives the same shape of capability (a
 location-transparent method call that may cross a process boundary) as a
-first-class language feature, with static isolation checking. If workers-swift
+first-class language feature, with static isolation checking. If WorkerKit
 could back a `DistributedActorSystem` with Workers RPC, a Durable Object (or
 a service binding) could be called as an ordinary `distributed func`, with
 the compiler enforcing `async throws` and `Codable`-ish argument/result
@@ -100,7 +100,7 @@ and never interpret `target.identifier` at all:
 - Caller-side `WorkersActorSystem.remoteCall`/`remoteCallVoid` serializes
   the (still-mangled, opaque) identifier plus the encoded invocation and
   sends both to one fixed, always-registered Workers RPC method on the
-  callee (a Durable Object or service binding backed by workers-swift) —
+  callee (a Durable Object or service binding backed by WorkerKit) —
   not a per-method entry in `rpcExports`.
 - The callee's `WorkersActorSystem` decodes that payload and calls
   `executeDistributedTarget(on:target:invocationDecoder:handler:)` with the
@@ -130,7 +130,7 @@ demangling. Empirically, the plain method name is the identifier chunk
 immediately following the type's mangled chunk:
 `$s9DistSpike7GreeterC5greet_...` → skip `9DistSpike` → skip `7GreeterC` →
 read `5greet` → `"greet"`. Cheap, no new dependency, ships as Swift source in
-`WorkersSwift`. Fragile against anything the narrow parser doesn't
+`WorkerKit`. Fragile against anything the narrow parser doesn't
 anticipate: extensions, nested types, operators, generic methods, and any
 mangling-scheme change across Swift versions all risk silently
 misparsing rather than failing loudly.
@@ -210,7 +210,7 @@ confirmed"). What's left is about actually building option 4:
    Durable Object/binding look like concretely — a reserved method name
    (e.g. `__distributedCall`) that `worker-build` always emits, separate
    from `rpcExports`/`durableObjectExports`? Does it need `worker-build`
-   involvement at all, or can it be plain `WorkersSwift` library code (an
+   involvement at all, or can it be plain `WorkerKit` library code (an
    RPC target the macros don't need to know about)?
 3. How does the callee side know *which* local actor instance to run
    `executeDistributedTarget` against for a given call — is this scoped to
@@ -257,7 +257,7 @@ questions considered:
   serialization step at all.
 - **Fixed RPC method (Q2):** no `worker-build` involvement. The one fixed
   entry point is a plain top-level `@RPC` function
-  (`__workersSwiftDistributedCall`), reusing 100% of the existing `@RPC`
+  (`__workerKitDistributedCall`), reusing 100% of the existing `@RPC`
   macro/dispatch machinery instead of adding a new export kind.
 - **Actor routing (Q3):** supported both ways. `WorkersActorSystem.host(_:)`
   still gives the narrowest case — one hosted singleton actor per system,

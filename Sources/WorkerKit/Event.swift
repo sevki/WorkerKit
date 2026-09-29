@@ -16,8 +16,8 @@ public enum WorkerEvent {
 /// becomes a 500 response. The macro generates the `workers_js_main` export
 /// that the JavaScript shim calls once per isolate, so a worker has exactly one
 /// `@Event(.fetch)` function.
-@attached(peer, names: named(__workersSwift_main))
-public macro Event(_ event: WorkerEvent) = #externalMacro(module: "WorkersSwiftMacros", type: "EventMacro")
+@attached(peer, names: named(__workerKit_main))
+public macro Event(_ event: WorkerEvent) = #externalMacro(module: "WorkerKitMacros", type: "EventMacro")
 
 /// Makes a top-level class a Durable Object, like workers-rs'
 /// `#[durable_object]`. The class conforms to `DurableObject`; mark the
@@ -27,7 +27,7 @@ public macro Event(_ event: WorkerEvent) = #externalMacro(module: "WorkersSwiftM
 ///     "durable_objects": { "bindings": [{ "name": "COUNTER", "class_name": "Counter" }] }
 ///
 /// If the class declares exactly one property of type `WorkersActorSystem`,
-/// this also generates the `__workersSwiftDistributedCall` forwarder that
+/// this also generates the `__workerKitDistributedCall` forwarder that
 /// hosts a distributed actor through it, so a Durable Object that hosts one
 /// needs only:
 ///
@@ -46,10 +46,10 @@ public macro Event(_ event: WorkerEvent) = #externalMacro(module: "WorkersSwiftM
 /// Write the forwarder by hand instead when the class hosts more than one
 /// `WorkersActorSystem` (the convention only applies when there's exactly
 /// one to be unambiguous) — see `WorkersActorSystem`'s documentation.
-@attached(peer, names: prefixed(__workersSwift_do_))
-@attached(member, names: named(__workersSwiftDistributedCall))
+@attached(peer, names: prefixed(__workerKit_do_))
+@attached(member, names: named(__workerKitDistributedCall))
 @attached(extension, conformances: DurableObject)
-public macro DurableObject() = #externalMacro(module: "WorkersSwiftMacros", type: "DurableObjectMacro")
+public macro DurableObject() = #externalMacro(module: "WorkerKitMacros", type: "DurableObjectMacro")
 
 /// Makes a function callable by other workers over RPC:
 ///
@@ -59,5 +59,5 @@ public macro DurableObject() = #externalMacro(module: "WorkersSwiftMacros", type
 ///
 /// Arguments and results convert through JavaScriptKit's
 /// `ConstructibleFromJSValue` and `ConvertibleToJSValue`.
-@attached(peer, names: prefixed(__workersSwift_rpc_))
-public macro RPC() = #externalMacro(module: "WorkersSwiftMacros", type: "RPCMacro")
+@attached(peer, names: prefixed(__workerKit_rpc_))
+public macro RPC() = #externalMacro(module: "WorkerKitMacros", type: "RPCMacro")

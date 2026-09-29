@@ -1,5 +1,5 @@
 {
-  "name": "workers-swift-e2e",
+  "name": "WorkerKit-e2e",
   "private": true,
   "type": "module",
   "scripts": {

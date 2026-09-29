@@ -4,7 +4,7 @@ import JavaScriptKit
 /// The entry points that `@Event` expansions call.
 public enum WorkersRuntime {
     /// Installs the Swift concurrency executor on the JavaScript event loop
-    /// and registers `handler` as `globalThis.__workersSwiftFetch`, which the
+    /// and registers `handler` as `globalThis.__workerKitFetch`, which the
     /// shim calls with the runtime's `request`, `env`, and `ctx`.
     public static func registerFetch(
         _ handler: @escaping @Sendable (Request, Env, Context) async throws -> Response
@@ -33,7 +33,7 @@ public enum WorkersRuntime {
                 }
             }.jsValue
         }
-        JSObject.global.__workersSwiftFetch = .object(fetch)
+        JSObject.global.__workerKitFetch = .object(fetch)
     }
 
     /// An `@RPC` method: calls it on an instance with the JavaScript
@@ -41,7 +41,7 @@ public enum WorkersRuntime {
     public typealias RPCMethod<Object> = (Object, [JSValue]) async throws -> JSValue
 
     /// Registers Durable Object class `name` in
-    /// `globalThis.__workersSwiftDurableObjects`. For each object the runtime
+    /// `globalThis.__workerKitDurableObjects`. For each object the runtime
     /// creates, the shim calls the registered factory with `ctx` and `env`; it
     /// creates a `T` and returns the `fetch`, `alarm` and `rpc` entry points
     /// the generated JavaScript class forwards to.
@@ -137,14 +137,14 @@ public enum WorkersRuntime {
             return .object(entryPoints)
         }
 
-        if JSObject.global.__workersSwiftDurableObjects.isUndefined {
-            JSObject.global.__workersSwiftDurableObjects = .object(JSObject())
+        if JSObject.global.__workerKitDurableObjects.isUndefined {
+            JSObject.global.__workerKitDurableObjects = .object(JSObject())
         }
-        JSObject.global.__workersSwiftDurableObjects.object![name] = .object(factory)
+        JSObject.global.__workerKitDurableObjects.object![name] = .object(factory)
     }
 
     /// Registers the top-level `@RPC` function `name` in
-    /// `globalThis.__workersSwiftRPC`, from where the worker's default
+    /// `globalThis.__workerKitRPC`, from where the worker's default
     /// `WorkerEntrypoint` class calls it with the JavaScript arguments.
     public static func registerRPC(name: String, _ function: @escaping @Sendable ([JSValue]) async throws -> JSValue) {
         JavaScriptEventLoop.installGlobalExecutor()
@@ -160,10 +160,10 @@ public enum WorkersRuntime {
             }.jsValue
         }
 
-        if JSObject.global.__workersSwiftRPC.isUndefined {
-            JSObject.global.__workersSwiftRPC = .object(JSObject())
+        if JSObject.global.__workerKitRPC.isUndefined {
+            JSObject.global.__workerKitRPC = .object(JSObject())
         }
-        JSObject.global.__workersSwiftRPC.object![name] = .object(entryPoint)
+        JSObject.global.__workerKitRPC.object![name] = .object(entryPoint)
     }
 
     /// Converts argument `index` of an `@RPC` call to `T`.

@@ -10,20 +10,20 @@ let package = Package(
         .executable(name: "GreeterWorkerWasm", targets: ["GreeterWorkerWasm"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/sevki/workers-swift.git", from: "1.0.0"),
+        .package(url: "https://github.com/sevki/WorkerKit.git", from: "1.0.0"),
     ],
     targets: [
         .target(
             name: "GreeterKit",
-            dependencies: [.product(name: "WorkersDistributed", package: "workers-swift")]
+            dependencies: [.product(name: "WorkerKitDistributed", package: "WorkerKit")]
         ),
         // The worker itself: hosts `Greeter` and answers HTTP requests.
         .target(
             name: "GreeterWorker",
             dependencies: [
                 "GreeterKit",
-                .product(name: "WorkersSwift", package: "workers-swift"),
-                .product(name: "WorkersDistributed", package: "workers-swift"),
+                .product(name: "WorkerKit", package: "WorkerKit"),
+                .product(name: "WorkerKitDistributed", package: "WorkerKit"),
             ]
         ),
         // A worker only runs as wasm, so the host build leaves it out.

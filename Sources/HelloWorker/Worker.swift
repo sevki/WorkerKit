@@ -1,9 +1,9 @@
 import Distributed
 import HelloWorkerActors
 import JavaScriptKit
-import WorkersDistributed
+import WorkerKitDistributed
 import WASILibc
-import WorkersSwift
+import WorkerKit
 
 @Event(.fetch)
 func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
@@ -462,7 +462,7 @@ private let doubler: Doubler = {
     return actor
 }()
 
-@RPC func __workersSwiftDistributedCall(
+@RPC func __workerKitDistributedCall(
     _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
 ) async throws -> JSValue {
     // A top-level `let` initializes lazily, on first access — and nothing

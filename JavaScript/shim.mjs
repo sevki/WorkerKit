@@ -6,7 +6,7 @@
 //
 // workerd and celld (like Wrangler) resolve a `.wasm` import to a compiled
 // `WebAssembly.Module`.
-import wasmModule from "./WorkersSwift.wasm";
+import wasmModule from "./WorkerKit.wasm";
 
 const WASI_EBADF = 8;
 const WASI_EINVAL = 28;
@@ -166,11 +166,11 @@ async function start() {
   // A reactor module does not export `main`, so SwiftRuntime.main() would not
   // reach Swift. Instead:
   // - `@Event(.fetch)` generates `workers_js_main`, which registers
-  //   globalThis.__workersSwiftFetch;
+  //   globalThis.__workerKitFetch;
   // - each `@DurableObject` class generates a `workers_do:<Class>` export,
-  //   which registers its factory in globalThis.__workersSwiftDurableObjects;
+  //   which registers its factory in globalThis.__workerKitDurableObjects;
   // - each top-level `@RPC` function generates a `workers_rpc:<name>` export,
-  //   which registers it in globalThis.__workersSwiftRPC.
+  //   which registers it in globalThis.__workerKitRPC.
   instance.exports.workers_js_main?.();
   for (const [name, value] of Object.entries(instance.exports)) {
     if ((name.startsWith("workers_do:") || name.startsWith("workers_rpc:")) && typeof value === "function") {
@@ -192,9 +192,9 @@ function ensureStarted() {
 // Called by the Durable Object classes that `worker-build` appends to this
 // module: creates the Swift object and returns its fetch/alarm/WebSocket/rpc
 // entry points.
-async function __workersSwiftDurableObject(name, ctx, env) {
+async function __workerKitDurableObject(name, ctx, env) {
   await ensureStarted();
-  const factory = globalThis.__workersSwiftDurableObjects?.[name];
+  const factory = globalThis.__workerKitDurableObjects?.[name];
   if (typeof factory !== "function") {
     throw new Error(`The Swift worker has no @DurableObject class ${name}`);
   }
@@ -213,9 +213,9 @@ async function __workersSwiftDurableObject(name, ctx, env) {
 // The worker's fetch handler. `worker-build` appends the default export that
 // calls it, as a plain object or, when the worker has top-level `@RPC`
 // functions, as a WorkerEntrypoint class.
-async function __workersSwiftFetch(request, env, ctx) {
+async function __workerKitFetch(request, env, ctx) {
   await ensureStarted();
-  const handler = globalThis.__workersSwiftFetch;
+  const handler = globalThis.__workerKitFetch;
   if (typeof handler !== "function") {
     throw new Error("The Swift worker has no @Event(.fetch) function");
   }
@@ -240,9 +240,9 @@ function trackingWaitUntil(ctx) {
 }
 
 // Calls the top-level `@RPC` function `name`.
-async function __workersSwiftRPC(name, args) {
+async function __workerKitRPC(name, args) {
   await ensureStarted();
-  const rpc = globalThis.__workersSwiftRPC?.[name];
+  const rpc = globalThis.__workerKitRPC?.[name];
   if (typeof rpc !== "function") {
     throw new Error(`The Swift worker has no @RPC function ${name}`);
   }

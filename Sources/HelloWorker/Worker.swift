@@ -113,6 +113,50 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
         try await kv.put("bytes", try await req.bytes())
         return Response(status: 200, headers: [], body: try await kv.bytes("bytes") ?? [])
 
+    case ("GET", "/r2"):
+        // Lists the R2 keys under ?prefix=, a page of ?limit= at a time.
+        let query = JSObject.global.URL.object!.new(req.url).searchParams.object!
+        let page = try await env.r2("R2").list(
+            prefix: query.get!("prefix").string,
+            limit: query.get!("limit").string.flatMap { Int($0) },
+            cursor: query.get!("cursor").string
+        )
+        return Response.ok(page.objects.map(\.key).joined(separator: ","))
+            .withHeader("x-truncated", String(page.truncated))
+            .withHeader("x-cursor", page.cursor ?? "")
+
+    case (let method, let path) where path.hasPrefix("/r2/"):
+        // An object store over R2: GET, PUT and DELETE /r2/<key>.
+        let key = String(path.dropFirst("/r2/".count))
+        let bucket = env.r2("R2")
+        switch method {
+        case "GET":
+            guard let object = try await bucket.get(key) else {
+                return .error("Not Found", 404)
+            }
+            return Response.ok(try await object.text())
+                .withHeader("x-custom-metadata", object.metadata.customMetadata["by"] ?? "")
+        case "PUT":
+            try await bucket.put(
+                key, try await req.text(),
+                httpMetadata: R2HTTPMetadata(contentType: "text/plain"),
+                customMetadata: ["by": "swift"]
+            )
+            return .empty(status: 201)
+        case "DELETE":
+            try await bucket.delete(key)
+            return .empty()
+        default:
+            return .error("Method Not Allowed", 405)
+        }
+
+    case ("POST", "/r2-bytes"):
+        // Stores the request body as bytes and reads it back as bytes.
+        let bucket = env.r2("R2")
+        try await bucket.put("bytes", try await req.bytes())
+        let object = try await bucket.get("bytes")
+        return Response(status: 200, headers: [], body: try await object?.bytes() ?? [])
+
     case (let method, let path) where path.hasPrefix("/distributed/double/"):
         guard method == "GET" else {
             return .error("Method Not Allowed", 405)

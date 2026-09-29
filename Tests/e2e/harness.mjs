@@ -89,8 +89,108 @@ export default {
 };
 `;
 
+// workerd sends every r2Bucket binding operation as an HTTP request to a
+// service, always GET (head/get/list) or PUT (put/delete): the request
+// itself - a JSON object discriminated by a "method" field, matching
+// workerd's R2BindingRequest capnp schema - travels in the CF-R2-Request
+// header for a GET, or as a length-prefixed JSON blob at the front of the
+// body for a PUT (CF-R2-Metadata-Size gives that prefix's byte length; the
+// object's raw bytes, if any, follow immediately after). The response
+// mirrors that shape: CF-R2-Metadata-Size names a JSON prefix of the body,
+// with the object's raw bytes (get only) following. A missing key answers
+// 404 with a CF-R2-Error header carrying R2's own "object not found" code
+// (10007) - without it, the real binding can't tell "not found" apart from
+// a generic error and throws instead of returning null. This worker answers
+// from memory.
+const r2Service = `
+const entries = new Map();
+
+function notFound() {
+  return new Response(null, {
+    status: 404,
+    headers: { "CF-R2-Error": JSON.stringify({ version: 0, v4code: 10007, message: "The specified key does not exist." }) },
+  });
+}
+
+function metadataFor(key, entry) {
+  return {
+    name: key,
+    version: "1",
+    size: entry.value.byteLength,
+    etag: entry.etag,
+    uploaded: entry.uploaded,
+    httpFields: entry.httpFields,
+    customFields: Object.entries(entry.customFields).map(([k, v]) => ({ k, v })),
+  };
+}
+
+// Concatenates the JSON metadata and (optionally) the object's raw bytes
+// into one body, with CF-R2-Metadata-Size marking where the JSON ends.
+function metadataResponse(metadata, body) {
+  const json = new TextEncoder().encode(JSON.stringify(metadata));
+  const bytes = body ? new Uint8Array(json.length + body.byteLength) : json;
+  if (body) {
+    bytes.set(json, 0);
+    bytes.set(body, json.length);
+  }
+  return new Response(bytes, { headers: { "CF-R2-Metadata-Size": String(json.length) } });
+}
+
+export default {
+  async fetch(request) {
+    if (request.method === "GET") {
+      const req = JSON.parse(request.headers.get("CF-R2-Request"));
+      if (req.method === "list") {
+        const prefix = req.prefix ?? "";
+        const limit = req.limit ?? 1000;
+        const start = req.cursor ? Number(req.cursor) : 0;
+        const names = [...entries.keys()].filter((name) => name.startsWith(prefix)).sort();
+        const page = names.slice(start, start + limit);
+        const truncated = start + limit < names.length;
+        return metadataResponse({
+          objects: page.map((name) => metadataFor(name, entries.get(name))),
+          truncated,
+          cursor: truncated ? String(start + limit) : "",
+          delimitedPrefixes: [],
+        });
+      }
+      const entry = entries.get(req.object);
+      if (!entry) {
+        return notFound();
+      }
+      return req.method === "head"
+        ? metadataResponse(metadataFor(req.object, entry))
+        : metadataResponse(metadataFor(req.object, entry), entry.value);
+    }
+
+    // PUT: either a put or a delete, told apart by the "method" field in
+    // the JSON prefix of the body.
+    const metadataSize = Number(request.headers.get("CF-R2-Metadata-Size"));
+    const body = new Uint8Array(await request.arrayBuffer());
+    const req = JSON.parse(new TextDecoder().decode(body.subarray(0, metadataSize)));
+    if (req.method === "delete") {
+      for (const key of req.object !== undefined ? [req.object] : req.objects) {
+        entries.delete(key);
+      }
+      return new Response(JSON.stringify({}));
+    }
+    const value = body.subarray(metadataSize);
+    const customFields = Object.fromEntries((req.customFields ?? []).map(({ k, v }) => [k, v]));
+    const entry = {
+      value,
+      etag: Math.random().toString(36).slice(2),
+      uploaded: Date.now(),
+      httpFields: req.httpFields ?? {},
+      customFields,
+    };
+    entries.set(req.object, entry);
+    return metadataResponse(metadataFor(req.object, entry));
+  },
+};
+`;
+
 const launchers = {
-  async workerd(directory, port, wasmName, { vars, durableObjects, kvNamespaces, selfBinding }) {
+  async workerd(directory, port, wasmName, { vars, durableObjects, kvNamespaces, r2Buckets, selfBinding }) {
     const bindings = [
       ...(selfBinding ? [`(name = ${JSON.stringify(selfBinding)}, service = "main")`] : []),
       ...Object.entries(vars)
@@ -99,11 +199,17 @@ const launchers = {
         .map(([name, className]) => `(name = ${JSON.stringify(name)}, durableObjectNamespace = ${JSON.stringify(className)})`),
       ...Object.keys(kvNamespaces)
         .map((name) => `(name = ${JSON.stringify(name)}, kvNamespace = "kv-${name}")`),
+      ...Object.keys(r2Buckets)
+        .map((name) => `(name = ${JSON.stringify(name)}, r2Bucket = "r2-${name}")`),
     ].join(", ");
     const kvServices = Object.keys(kvNamespaces)
       .map((name) => `, (name = "kv-${name}", worker = .kvWorker)`)
       .join("");
+    const r2Services = Object.keys(r2Buckets)
+      .map((name) => `, (name = "r2-${name}", worker = .r2Worker)`)
+      .join("");
     await writeFile(join(directory, "kv-service.mjs"), kvService);
+    await writeFile(join(directory, "r2-service.mjs"), r2Service);
     // workerd requires a DiskDirectory's path to already exist.
     await mkdir(join(directory, "disk"));
     // enableSql = true exposes state.storage.sql (SQLStorage); every
@@ -119,7 +225,7 @@ using Workerd = import "/workerd/workerd.capnp";
 
 const config :Workerd.Config = (
   services = [
-    (name = "main", worker = .worker)${kvServices},
+    (name = "main", worker = .worker)${kvServices}${r2Services},
     (name = "disk", disk = (path = ${JSON.stringify(join(directory, "disk"))}, writable = true)),
   ],
   sockets = [(name = "http", address = "127.0.0.1:${port}", http = (), service = "main")],
@@ -140,12 +246,17 @@ const kvWorker :Workerd.Worker = (
   modules = [(name = "kv-service.mjs", esModule = embed "kv-service.mjs")],
   compatibilityDate = "2026-01-01",
 );
+
+const r2Worker :Workerd.Worker = (
+  modules = [(name = "r2-service.mjs", esModule = embed "r2-service.mjs")],
+  compatibilityDate = "2026-01-01",
+);
 `);
     const binary = process.env.WORKERD_BIN ?? require("workerd").default;
     return [binary, ["serve", join(directory, "config.capnp")]];
   },
 
-  async celld(directory, port, _wasmName, { vars, durableObjects, kvNamespaces, selfBinding }) {
+  async celld(directory, port, _wasmName, { vars, durableObjects, kvNamespaces, r2Buckets, selfBinding }) {
     const classNames = [...new Set(Object.values(durableObjects))];
     await writeFile(join(directory, "wrangler.jsonc"), JSON.stringify({
       name: "workers-swift-e2e",
@@ -158,6 +269,7 @@ const kvWorker :Workerd.Worker = (
       },
       migrations: classNames.length ? [{ tag: "v1", new_sqlite_classes: classNames }] : [],
       kv_namespaces: Object.entries(kvNamespaces).map(([binding, id]) => ({ binding, id })),
+      r2_buckets: Object.entries(r2Buckets).map(([binding, bucketName]) => ({ binding, bucket_name: bucketName })),
       services: selfBinding ? [{ binding: selfBinding, service: "workers-swift-e2e" }] : [],
     }, null, 2));
     const binary = process.env.CELLD_BIN ?? "celld";
@@ -169,8 +281,12 @@ const kvWorker :Workerd.Worker = (
 /// `runtime` and resolves once it answers HTTP. `vars` are plain-text env
 /// variables; `durableObjects` maps binding names to Durable Object classes;
 /// `kvNamespaces` maps binding names to KV namespace ids, which start empty;
+/// `r2Buckets` maps binding names to R2 bucket names, which start empty;
 /// `selfBinding` names a service binding to the worker itself.
-export async function serve(runtime, files, wasmName, { vars = {}, durableObjects = {}, kvNamespaces = {}, selfBinding } = {}) {
+export async function serve(
+  runtime, files, wasmName,
+  { vars = {}, durableObjects = {}, kvNamespaces = {}, r2Buckets = {}, selfBinding } = {}
+) {
   const launch = launchers[runtime];
   if (!launch) {
     throw new Error(`unknown runtime ${runtime}`);
@@ -182,7 +298,7 @@ export async function serve(runtime, files, wasmName, { vars = {}, durableObject
   }
 
   const port = await freePort();
-  const [command, args] = await launch(directory, port, wasmName, { vars, durableObjects, kvNamespaces, selfBinding });
+  const [command, args] = await launch(directory, port, wasmName, { vars, durableObjects, kvNamespaces, r2Buckets, selfBinding });
   const child = spawn(command, args, { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
   const output = [];
   child.stdout.on("data", (chunk) => output.push(chunk.toString()));

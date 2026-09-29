@@ -24,7 +24,7 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
 
 | workers-rs | workers-swift |
 |---|---|
-| `worker` (`Request`, `Response`, `Env`, `Context`, `KvStore`, `SqlStorage`, …) | `WorkersSwift` (`KVStore` for `KvStore`, `SQLStorage` for `SqlStorage`) |
+| `worker` (`Request`, `Response`, `Env`, `Context`, `KvStore`, `Bucket`, `SqlStorage`, …) | `WorkersSwift` (`KVStore` for `KvStore`, `R2Bucket` for `Bucket`, `SQLStorage` for `SqlStorage`) |
 | `#[event(fetch)]` | `@Event(.fetch)` (`WorkersSwiftMacros`) |
 | `#[durable_object]` + `impl DurableObject` | `@DurableObject` class, with `@RPC` methods |
 | `wasm-bindgen`, `js-sys`, `wasm-bindgen-futures` | [JavaScriptKit](https://github.com/swiftwasm/JavaScriptKit) and JavaScriptEventLoop |
@@ -36,7 +36,7 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
 - A status outside 200–599 or a header that the Fetch `Headers` class would reject becomes a `500` rather than a JavaScript exception, and 204, 205 and 304 are sent without a body.
 - An error thrown by the handler is logged with `console.error` and becomes `500 Internal Server Error`.
 
-`Env` reads plain-text bindings (`env.variable("NAME")`, `env.secret("NAME")`), KV namespaces (`env.kv("NAME")`), Durable Object namespaces (`env.durableObject("NAME")`) and service bindings (`env.service("NAME")`), and `Context` exposes `waitUntil` and `passThroughOnException`. Other typed bindings such as R2 and D1 are not wrapped yet.
+`Env` reads plain-text bindings (`env.variable("NAME")`, `env.secret("NAME")`), KV namespaces (`env.kv("NAME")`), R2 buckets (`env.r2("NAME")`), Durable Object namespaces (`env.durableObject("NAME")`) and service bindings (`env.service("NAME")`), and `Context` exposes `waitUntil` and `passThroughOnException`. Other typed bindings such as D1 are not wrapped yet.
 
 ## KV
 
@@ -50,6 +50,19 @@ try await kv.delete("greeting")
 ```
 
 `KVStore` is workers-rs' `KvStore`. It also reads and writes bytes (`bytes(_:)`, and `put(_:_:)` with a `[UInt8]`). Bind a namespace with `"kv_namespaces": [{ "binding": "CACHE", "id": "…" }]`.
+
+## R2
+
+```swift
+let bucket = env.r2("ASSETS")
+try await bucket.put("greeting.txt", "hello", httpMetadata: R2HTTPMetadata(contentType: "text/plain"))
+let object = try await bucket.get("greeting.txt")   // R2ObjectBody?
+let text = try await object?.text()                 // String
+let page = try await bucket.list(prefix: "user/", limit: 100) // objects, truncated, cursor
+try await bucket.delete("greeting.txt")
+```
+
+`R2Bucket` is workers-rs' `Bucket`. `get`/`put` also take conditional (`onlyIf:`) and ranged-read (`range:`) options, and `put(_:_:)` reads/writes bytes with a `[UInt8]`; multipart uploads aren't wrapped yet. Bind a bucket with `"r2_buckets": [{ "binding": "ASSETS", "bucket_name": "…" }]`.
 
 ## Durable Objects and RPC
 

@@ -54,6 +54,7 @@ away from any Web or Workers API the library does not wrap yet.
 - ``Env``
 - ``Context``
 - <doc:KVStorage>
+- <doc:R2Storage>
 - <doc:DurableObjects>
 - <doc:DistributedActors>
 
@@ -78,6 +79,17 @@ away from any Web or Workers API the library does not wrap yet.
 - ``KVStore``
 - ``KVListResult``
 - ``KVKey``
+
+### R2
+
+- ``R2Bucket``
+- ``R2Object``
+- ``R2ObjectBody``
+- ``R2HTTPMetadata``
+- ``R2Checksums``
+- ``R2Conditional``
+- ``R2Range``
+- ``R2ListResult``
 
 ### The generated runtime entry points
 

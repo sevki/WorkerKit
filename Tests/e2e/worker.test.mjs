@@ -44,6 +44,7 @@ for (const runtime of runtimes) {
           RPCGATEWAY: "RPCGateway",
         },
         kvNamespaces: { KV: "workers-swift-e2e-kv" },
+        r2Buckets: { R2: "workers-swift-e2e-r2" },
         selfBinding: "SELF",
       });
     });
@@ -332,6 +333,57 @@ for (const runtime of runtimes) {
     test("KV stores and reads bytes", async () => {
       const bytes = new Uint8Array([0, 255, 1, 128, 0xc3]);
       const result = await fetch(`${server.baseURL}/kv-bytes`, { method: "POST", body: bytes });
+      assert.equal(result.status, 200);
+      assert.deepEqual(new Uint8Array(await result.arrayBuffer()), bytes);
+    });
+
+    test("R2 put, get and delete", async () => {
+      const put = await request("/r2/greeting", { method: "PUT", body: "hello r2" });
+      assertNotCrashed(put, "PUT /r2/greeting");
+      assert.equal(put.response.status, 201);
+
+      const get = await request("/r2/greeting");
+      assertNotCrashed(get, "GET /r2/greeting");
+      assert.equal(get.response.status, 200);
+      assert.equal(get.body, "hello r2");
+      assert.equal(get.response.headers.get("x-custom-metadata"), "swift");
+
+      const deleted = await request("/r2/greeting", { method: "DELETE" });
+      assertNotCrashed(deleted, "DELETE /r2/greeting");
+      assert.equal(deleted.response.status, 204);
+      assert.equal((await request("/r2/greeting")).response.status, 404);
+    });
+
+    test("R2 get of a missing key returns nil", async () => {
+      const result = await request("/r2/missing");
+      assert.equal(result.response.status, 404);
+      assert.equal(result.body, "Not Found");
+    });
+
+    test("R2 list pages through keys by prefix", async () => {
+      for (const key of ["list/b", "list/a", "other"]) {
+        assert.equal((await request(`/r2/${key}`, { method: "PUT", body: key })).response.status, 201);
+      }
+
+      const all = await request("/r2?prefix=list/");
+      assertNotCrashed(all, "/r2?prefix=list/");
+      assert.equal(all.body, "list/a,list/b");
+      assert.equal(all.response.headers.get("x-truncated"), "false");
+
+      const first = await request("/r2?prefix=list/&limit=1");
+      assert.equal(first.body, "list/a");
+      assert.equal(first.response.headers.get("x-truncated"), "true");
+      const cursor = first.response.headers.get("x-cursor");
+      assert.ok(cursor);
+
+      const second = await request(`/r2?prefix=list/&limit=1&cursor=${encodeURIComponent(cursor)}`);
+      assertNotCrashed(second, "/r2 with a cursor");
+      assert.equal(second.body, "list/b");
+    });
+
+    test("R2 stores and reads bytes", async () => {
+      const bytes = new Uint8Array([0, 255, 1, 128, 0xc3]);
+      const result = await fetch(`${server.baseURL}/r2-bytes`, { method: "POST", body: bytes });
       assert.equal(result.status, 200);
       assert.deepEqual(new Uint8Array(await result.arrayBuffer()), bytes);
     });

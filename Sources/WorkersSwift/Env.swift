@@ -32,6 +32,11 @@ public final class Env: @unchecked Sendable {
         KVStore(jsObject[name].object!)
     }
 
+    /// An R2 bucket binding, such as `r2_buckets` in wrangler.jsonc.
+    public func r2(_ name: String) -> R2Bucket {
+        R2Bucket(jsObject[name].object!)
+    }
+
     /// A service binding, such as `services` in wrangler.jsonc.
     public func service(_ name: String) -> Fetcher {
         Fetcher(jsObject[name].object!)

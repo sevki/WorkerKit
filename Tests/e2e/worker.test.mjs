@@ -102,10 +102,13 @@ for (const runtime of runtimes) {
       assert.equal(result.body, "asn=13335\nasOrganization=Cloudflare, Inc.\ncountry=US\ncolo=SJC");
     });
 
-    test("Request.cf is nil when no cf blob is attached", async () => {
+    test("Request.cf with no cf data attached", async () => {
       const result = await request("/cf");
       assertNotCrashed(result, "/cf");
-      assert.equal(result.body, "no cf");
+      // workerd reports no cf object at all without a configured cfBlobHeader;
+      // celld's local dev emulation gives a cf object with every field empty.
+      const expected = runtime === "workerd" ? "no cf" : "asn=\nasOrganization=\ncountry=\ncolo=";
+      assert.equal(result.body, expected);
     });
 
     test("Request.text() awaits the body", async () => {

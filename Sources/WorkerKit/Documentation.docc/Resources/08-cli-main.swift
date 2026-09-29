@@ -1,6 +1,6 @@
 import Foundation
 import GreeterKit
-import WorkersDistributed
+import WorkerKitDistributed
 
 // swift run GreeterCLI https://greeter-worker.example.workers.dev world
 

@@ -1,6 +1,6 @@
 import Foundation
 import HelloWorkerActors
-import WorkersDistributed
+import WorkerKitDistributed
 
 // A native CLI that calls HelloWorker's Doubler distributed actor exactly
 // the way another worker would (`try await doubler.double(n)`) — the same

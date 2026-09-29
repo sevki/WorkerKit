@@ -1,6 +1,6 @@
 import SwiftSyntaxMacros
 import SwiftSyntaxMacrosTestSupport
-import WorkersSwiftMacros
+import WorkerKitMacros
 import XCTest
 
 private let macros: [String: any Macro.Type] = [
@@ -27,7 +27,7 @@ final class EventMacroTests: XCTestCase {
             @_expose(wasm, "workers_js_main")
             #endif
             @_cdecl("workers_js_main")
-            public func __workersSwift_main() {
+            public func __workerKit_main() {
                 WorkersRuntime.registerFetch { request, env, context in
                     try await fetch(req: request, env: env, ctx: context)
                 }
@@ -54,7 +54,7 @@ final class EventMacroTests: XCTestCase {
             @_expose(wasm, "workers_js_main")
             #endif
             @_cdecl("workers_js_main")
-            public func __workersSwift_main() {
+            public func __workerKit_main() {
                 WorkersRuntime.registerFetch { request, env, context in
                     handle(request, env, context)
                 }
@@ -146,8 +146,8 @@ final class EventMacroTests: XCTestCase {
             #if arch(wasm32)
             @_expose(wasm, "workers_do:Room")
             #endif
-            @_cdecl("__workersSwift_do_Room")
-            public func __workersSwift_do_Room() {
+            @_cdecl("__workerKit_do_Room")
+            public func __workerKit_do_Room() {
                 WorkersRuntime.registerDurableObject(Room.self, name: "Room", rpc: [:])
             }
             """,
@@ -187,8 +187,8 @@ final class EventMacroTests: XCTestCase {
             #if arch(wasm32)
             @_expose(wasm, "workers_do:Counter:increment,reset")
             #endif
-            @_cdecl("__workersSwift_do_Counter")
-            public func __workersSwift_do_Counter() {
+            @_cdecl("__workerKit_do_Counter")
+            public func __workerKit_do_Counter() {
                 WorkersRuntime.registerDurableObject(Counter.self, name: "Counter", rpc: [
                     "increment": { object, arguments in
                                     return try await object.increment(by: WorkersRuntime.rpcArgument(arguments, 0, as: Int.self)).jsValue
@@ -276,8 +276,8 @@ final class EventMacroTests: XCTestCase {
             #if arch(wasm32)
             @_expose(wasm, "workers_rpc:add")
             #endif
-            @_cdecl("__workersSwift_rpc_add")
-            public func __workersSwift_rpc_add() {
+            @_cdecl("__workerKit_rpc_add")
+            public func __workerKit_rpc_add() {
                 WorkersRuntime.registerRPC(name: "add") { arguments in
                     return try add(WorkersRuntime.rpcArgument(arguments, 0, as: Int.self), WorkersRuntime.rpcArgument(arguments, 1, as: Int.self)).jsValue
                 }
@@ -309,21 +309,21 @@ final class EventMacroTests: XCTestCase {
             """
             @DurableObject
             final class Room {
-                @WorkersSwift.RPC func ping() {
+                @WorkerKit.RPC func ping() {
                 }
             }
             """,
             expandedSource: """
             final class Room {
-                @WorkersSwift.RPC func ping() {
+                @WorkerKit.RPC func ping() {
                 }
             }
 
             #if arch(wasm32)
             @_expose(wasm, "workers_do:Room:ping")
             #endif
-            @_cdecl("__workersSwift_do_Room")
-            public func __workersSwift_do_Room() {
+            @_cdecl("__workerKit_do_Room")
+            public func __workerKit_do_Room() {
                 WorkersRuntime.registerDurableObject(Room.self, name: "Room", rpc: [
                     "ping": { object, arguments in
                                     object.ping();
@@ -476,7 +476,7 @@ final class EventMacroTests: XCTestCase {
                     counter = hostSystem.host(state.id) { Counter(actorSystem: $0) }
                 }
 
-                func __workersSwiftDistributedCall(
+                func __workerKitDistributedCall(
                     _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
                 ) async throws -> JSValue {
                     try await hostSystem.receive(
@@ -486,13 +486,13 @@ final class EventMacroTests: XCTestCase {
             }
 
             #if arch(wasm32)
-            @_expose(wasm, "workers_do:CounterObject:__workersSwiftDistributedCall")
+            @_expose(wasm, "workers_do:CounterObject:__workerKitDistributedCall")
             #endif
-            @_cdecl("__workersSwift_do_CounterObject")
-            public func __workersSwift_do_CounterObject() {
+            @_cdecl("__workerKit_do_CounterObject")
+            public func __workerKit_do_CounterObject() {
                 WorkersRuntime.registerDurableObject(CounterObject.self, name: "CounterObject", rpc: [
-                    "__workersSwiftDistributedCall": { object, arguments in
-                                    return try await object.__workersSwiftDistributedCall(WorkersRuntime.rpcArgument(arguments, 0, as: String.self), WorkersRuntime.rpcArgument(arguments, 1, as: JSValue.self), WorkersRuntime.rpcArgument(arguments, 2, as: [String].self)).jsValue
+                    "__workerKitDistributedCall": { object, arguments in
+                                    return try await object.__workerKitDistributedCall(WorkersRuntime.rpcArgument(arguments, 0, as: String.self), WorkersRuntime.rpcArgument(arguments, 1, as: JSValue.self), WorkersRuntime.rpcArgument(arguments, 2, as: [String].self)).jsValue
                                 },
                 ])
             }
@@ -519,8 +519,8 @@ final class EventMacroTests: XCTestCase {
             #if arch(wasm32)
             @_expose(wasm, "workers_do:Plain")
             #endif
-            @_cdecl("__workersSwift_do_Plain")
-            public func __workersSwift_do_Plain() {
+            @_cdecl("__workerKit_do_Plain")
+            public func __workerKit_do_Plain() {
                 WorkersRuntime.registerDurableObject(Plain.self, name: "Plain", rpc: [:])
             }
             """,
@@ -546,8 +546,8 @@ final class EventMacroTests: XCTestCase {
             #if arch(wasm32)
             @_expose(wasm, "workers_do:TwoSystems")
             #endif
-            @_cdecl("__workersSwift_do_TwoSystems")
-            public func __workersSwift_do_TwoSystems() {
+            @_cdecl("__workerKit_do_TwoSystems")
+            public func __workerKit_do_TwoSystems() {
                 WorkersRuntime.registerDurableObject(TwoSystems.self, name: "TwoSystems", rpc: [:])
             }
             """,
@@ -562,7 +562,7 @@ final class EventMacroTests: XCTestCase {
             final class CounterObject {
                 let hostSystem: WorkersActorSystem
 
-                @RPC func __workersSwiftDistributedCall(
+                @RPC func __workerKitDistributedCall(
                     _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
                 ) async throws -> JSValue {
                     try await hostSystem.receive(
@@ -575,7 +575,7 @@ final class EventMacroTests: XCTestCase {
             final class CounterObject {
                 let hostSystem: WorkersActorSystem
 
-                func __workersSwiftDistributedCall(
+                func __workerKitDistributedCall(
                     _ identifier: String, _ arguments: JSValue, _ genericSubstitutions: [String]
                 ) async throws -> JSValue {
                     try await hostSystem.receive(
@@ -585,13 +585,13 @@ final class EventMacroTests: XCTestCase {
             }
 
             #if arch(wasm32)
-            @_expose(wasm, "workers_do:CounterObject:__workersSwiftDistributedCall")
+            @_expose(wasm, "workers_do:CounterObject:__workerKitDistributedCall")
             #endif
-            @_cdecl("__workersSwift_do_CounterObject")
-            public func __workersSwift_do_CounterObject() {
+            @_cdecl("__workerKit_do_CounterObject")
+            public func __workerKit_do_CounterObject() {
                 WorkersRuntime.registerDurableObject(CounterObject.self, name: "CounterObject", rpc: [
-                    "__workersSwiftDistributedCall": { object, arguments in
-                                    return try await object.__workersSwiftDistributedCall(WorkersRuntime.rpcArgument(arguments, 0, as: String.self), WorkersRuntime.rpcArgument(arguments, 1, as: JSValue.self), WorkersRuntime.rpcArgument(arguments, 2, as: [String].self)).jsValue
+                    "__workerKitDistributedCall": { object, arguments in
+                                    return try await object.__workerKitDistributedCall(WorkersRuntime.rpcArgument(arguments, 0, as: String.self), WorkersRuntime.rpcArgument(arguments, 1, as: JSValue.self), WorkersRuntime.rpcArgument(arguments, 2, as: [String].self)).jsValue
                                 },
                 ])
             }

@@ -1,5 +1,5 @@
-import WorkersDistributed
-import WorkersSwift
+import WorkerKitDistributed
+import WorkerKit
 
 @Event(.fetch)
 func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {

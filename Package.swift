@@ -5,24 +5,24 @@ import CompilerPluginSupport
 import PackageDescription
 
 let package = Package(
-    name: "WorkersSwift",
+    name: "WorkerKit",
     platforms: [.macOS(.v15)],
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
-            name: "WorkersSwift",
-            targets: ["WorkersSwift"]
+            name: "WorkerKit",
+            targets: ["WorkerKit"]
         ),
         // `WorkersActorSystem`: one type for distributed actors, backed by
         // Workers RPC inside a worker and by a WebSocket everywhere else.
         .library(
-            name: "WorkersDistributed",
-            targets: ["WorkersDistributed"]
+            name: "WorkerKitDistributed",
+            targets: ["WorkerKitDistributed"]
         ),
-        // An example worker; `swift package worker-build` links it into WorkersSwift.wasm.
+        // An example worker; `swift package worker-build` links it into WorkerKit.wasm.
         .executable(
-            name: "WorkersSwiftWasm",
-            targets: ["WorkersSwiftWasm"]
+            name: "WorkerKitWasm",
+            targets: ["WorkerKitWasm"]
         ),
         // A native CLI that calls HelloWorker's Doubler distributed actor
         // over plain WebSocket/JSON — run it with `swift run HelloWorkerCLI
@@ -42,7 +42,7 @@ let package = Package(
         .package(url: "https://github.com/swiftwasm/JavaScriptKit.git", from: "0.59.0"),
         // `swift package generate-documentation` / `swift package --disable-sandbox preview-documentation`.
         .package(url: "https://github.com/swiftlang/swift-docc-plugin.git", from: "1.4.0"),
-        // WorkersDistributed's native transport: a real RFC 6455 client
+        // WorkerKitDistributed's native transport: a real RFC 6455 client
         // that works on Linux, unlike swift-corelibs-foundation's
         // URLSessionWebSocketTask (libcurl-backed there, and libcurl has no
         // WebSocket support at all).
@@ -53,16 +53,16 @@ let package = Package(
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
         .macro(
-            name: "WorkersSwiftMacros",
+            name: "WorkerKitMacros",
             dependencies: [
                 .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
                 .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
             ]
         ),
         .target(
-            name: "WorkersSwift",
+            name: "WorkerKit",
             dependencies: [
-                "WorkersSwiftMacros",
+                "WorkerKitMacros",
                 .product(name: "JavaScriptKit", package: "JavaScriptKit"),
                 .product(name: "JavaScriptEventLoop", package: "JavaScriptKit"),
                 .product(name: "JavaScriptBigIntSupport", package: "JavaScriptKit"),
@@ -71,9 +71,9 @@ let package = Package(
         // The one place the platform matters: each dependency is only needed
         // by the transport for its own platform.
         .target(
-            name: "WorkersDistributed",
+            name: "WorkerKitDistributed",
             dependencies: [
-                .target(name: "WorkersSwift", condition: .when(platforms: [.wasi])),
+                .target(name: "WorkerKit", condition: .when(platforms: [.wasi])),
                 .product(name: "JavaScriptKit", package: "JavaScriptKit", condition: .when(platforms: [.wasi])),
                 .product(name: "WSClient", package: "swift-websocket", condition: .when(platforms: [.macOS, .linux])),
                 .product(name: "Logging", package: "swift-log", condition: .when(platforms: [.macOS, .linux])),
@@ -82,26 +82,26 @@ let package = Package(
         // The distributed actors HelloWorker hosts and HelloWorkerCLI calls.
         .target(
             name: "HelloWorkerActors",
-            dependencies: ["WorkersDistributed"]
+            dependencies: ["WorkerKitDistributed"]
         ),
-        // The example worker; WorkersSwiftWasm links it into WorkersSwift.wasm.
+        // The example worker; WorkerKitWasm links it into WorkerKit.wasm.
         .target(
             name: "HelloWorker",
             dependencies: [
-                "WorkersSwift",
-                "WorkersDistributed",
+                "WorkerKit",
+                "WorkerKitDistributed",
                 "HelloWorkerActors",
                 .product(name: "JavaScriptKit", package: "JavaScriptKit"),
             ]
         ),
         // A worker only runs as wasm, so the host build leaves it out.
         .executableTarget(
-            name: "WorkersSwiftWasm",
+            name: "WorkerKitWasm",
             dependencies: [.target(name: "HelloWorker", condition: .when(platforms: [.wasi]))]
         ),
         .executableTarget(
             name: "HelloWorkerCLI",
-            dependencies: ["HelloWorkerActors", "WorkersDistributed"]
+            dependencies: ["HelloWorkerActors", "WorkerKitDistributed"]
         ),
         .plugin(
             name: "WorkerBuild",
@@ -116,13 +116,13 @@ let package = Package(
             )
         ),
         .testTarget(
-            name: "WorkersSwiftTests",
-            dependencies: ["WorkersSwift"]
+            name: "WorkerKitTests",
+            dependencies: ["WorkerKit"]
         ),
         .testTarget(
-            name: "WorkersSwiftMacrosTests",
+            name: "WorkerKitMacrosTests",
             dependencies: [
-                "WorkersSwiftMacros",
+                "WorkerKitMacros",
                 .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
             ]
         ),

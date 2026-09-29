@@ -1,5 +1,5 @@
 // End-to-end tests: serve the output of `swift package worker-build`
-// (worker.mjs + WorkersSwift.wasm, from Sources/HelloWorker) with real workerd
+// (worker.mjs + WorkerKit.wasm, from Sources/HelloWorker) with real workerd
 // and celld processes and send HTTP requests to them.
 //
 //   WORKER_DIR    directory holding the built worker (default: build/worker).
@@ -22,7 +22,7 @@ import { runtimes, serve } from "./harness.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const workerDirectory = resolve(root, process.env.WORKER_DIR ?? "build/worker");
-const built = existsSync(join(workerDirectory, "WorkersSwift.wasm"));
+const built = existsSync(join(workerDirectory, "WorkerKit.wasm"));
 const cli = resolve(root, process.env.HELLO_CLI ?? ".build/debug/HelloWorkerCLI");
 const cliSkip = !existsSync(cli) && `no HelloWorkerCLI at ${cli}; run swift build`;
 
@@ -36,15 +36,15 @@ for (const runtime of runtimes) {
     before(async () => {
       server = await serve(runtime, {
         "worker.mjs": await readFile(join(workerDirectory, "worker.mjs")),
-        "WorkersSwift.wasm": await readFile(join(workerDirectory, "WorkersSwift.wasm")),
-      }, "WorkersSwift.wasm", {
+        "WorkerKit.wasm": await readFile(join(workerDirectory, "WorkerKit.wasm")),
+      }, "WorkerKit.wasm", {
         vars: { GREETING: "hello from env" },
         durableObjects: {
           COUNTER: "Counter", FORKS: "ForkObject", PHILOSOPHERS: "PhilosopherObject", ECHO: "EchoSocket",
           RPCGATEWAY: "RPCGateway",
         },
-        kvNamespaces: { KV: "workers-swift-e2e-kv" },
-        r2Buckets: { R2: "workers-swift-e2e-r2" },
+        kvNamespaces: { KV: "WorkerKit-e2e-kv" },
+        r2Buckets: { R2: "WorkerKit-e2e-r2" },
         selfBinding: "SELF",
       });
     });

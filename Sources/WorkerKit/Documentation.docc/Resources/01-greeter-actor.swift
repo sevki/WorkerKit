@@ -1,5 +1,5 @@
 import Distributed
-import WorkersDistributed
+import WorkerKitDistributed
 
 /// A `distributed actor`, shared between the worker that hosts it and any
 /// native process that calls it.

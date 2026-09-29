@@ -11,19 +11,19 @@ let package = Package(
         .executable(name: "GreeterCLI", targets: ["GreeterCLI"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/sevki/workers-swift.git", from: "1.0.0"),
+        .package(url: "https://github.com/sevki/WorkerKit.git", from: "1.0.0"),
     ],
     targets: [
         .target(
             name: "GreeterKit",
-            dependencies: [.product(name: "WorkersDistributed", package: "workers-swift")]
+            dependencies: [.product(name: "WorkerKitDistributed", package: "WorkerKit")]
         ),
         .target(
             name: "GreeterWorker",
             dependencies: [
                 "GreeterKit",
-                .product(name: "WorkersSwift", package: "workers-swift"),
-                .product(name: "WorkersDistributed", package: "workers-swift"),
+                .product(name: "WorkerKit", package: "WorkerKit"),
+                .product(name: "WorkerKitDistributed", package: "WorkerKit"),
             ]
         ),
         .executableTarget(
@@ -31,11 +31,11 @@ let package = Package(
             dependencies: [.target(name: "GreeterWorker", condition: .when(platforms: [.wasi]))]
         ),
         // A native command-line tool: calls Greeter the same way the
-        // worker does, over WorkersDistributed's native WebSocket
+        // worker does, over WorkerKitDistributed's native WebSocket
         // transport instead of Workers RPC.
         .executableTarget(
             name: "GreeterCLI",
-            dependencies: ["GreeterKit", .product(name: "WorkersDistributed", package: "workers-swift")]
+            dependencies: ["GreeterKit", .product(name: "WorkerKitDistributed", package: "WorkerKit")]
         ),
     ]
 )

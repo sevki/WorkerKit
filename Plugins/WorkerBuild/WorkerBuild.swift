@@ -6,24 +6,24 @@ import PackagePlugin
 /// The Swift counterpart of workers-rs' `worker-build`: cross-compiles an
 /// executable product to a WASI reactor module with a Swift WebAssembly SDK
 /// and writes it next to the JavaScript entry point (JavaScriptKit's
-/// runtime.mjs followed by WorkersSwift's shim.mjs), ready for wrangler,
+/// runtime.mjs followed by WorkerKit's shim.mjs), ready for wrangler,
 /// workerd or celld:
 ///
 ///     build/worker/worker.mjs
-///     build/worker/WorkersSwift.wasm
+///     build/worker/WorkerKit.wasm
 ///
 /// Options:
 ///   --swift-sdk <id>        Swift SDK to build with (default: the installed
 ///                           `*_wasm` SDK)
 ///   --product <name>        executable product to build (default:
-///                           WorkersSwiftWasm, else the only executable)
+///                           WorkerKitWasm, else the only executable)
 ///   -c, --configuration     debug or release (default: release)
 ///   --output <dir>          output directory (default: build/worker)
 @main
 struct WorkerBuild: CommandPlugin {
     static let shimPath = "JavaScript/shim.mjs"
     static let runtimePath = "Plugins/PackageToJS/Templates/runtime.mjs"
-    static let wasmName = "WorkersSwift.wasm"
+    static let wasmName = "WorkerKit.wasm"
 
     func performCommand(context: PluginContext, arguments: [String]) async throws {
         // ArgumentExtractor only understands long options, so take the
@@ -56,7 +56,7 @@ struct WorkerBuild: CommandPlugin {
         let swift = try swiftExecutable(context)
         let sdk = try requestedSDK ?? defaultWasmSDK(swift: swift)
         let product = try requestedProduct ?? defaultProduct(in: context.package)
-        let shim = try file(Self.shimPath, inPackageWithProduct: "WorkersSwift", from: context.package)
+        let shim = try file(Self.shimPath, inPackageWithProduct: "WorkerKit", from: context.package)
         let runtime = try file(Self.runtimePath, inPackageWithProduct: "JavaScriptKit", from: context.package)
         let outputDirectory = requestedOutput.map {
             URL(fileURLWithPath: $0, relativeTo: packageDirectory)
@@ -145,8 +145,8 @@ struct WorkerBuild: CommandPlugin {
 
     private func defaultProduct(in package: Package) throws -> String {
         let executables = package.products.filter { $0 is ExecutableProduct }.map(\.name)
-        if executables.contains("WorkersSwiftWasm") {
-            return "WorkersSwiftWasm"
+        if executables.contains("WorkerKitWasm") {
+            return "WorkerKitWasm"
         }
         guard executables.count == 1, let product = executables.first else {
             throw WorkerBuildError("pass --product to pick one of the executable products: \(executables.joined(separator: ", "))")
@@ -226,10 +226,10 @@ struct WorkerBuild: CommandPlugin {
     private func entryPoints(rpcFunctions: [String], durableObjects: [(name: String, methods: [String])]) -> String {
         var imports: [String] = []
         if !rpcFunctions.isEmpty {
-            imports.append("WorkerEntrypoint as __WorkersSwiftWorkerEntrypoint")
+            imports.append("WorkerEntrypoint as __WorkerKitWorkerEntrypoint")
         }
         if !durableObjects.isEmpty {
-            imports.append("DurableObject as __WorkersSwiftDurableObjectBase")
+            imports.append("DurableObject as __WorkerKitDurableObjectBase")
         }
 
         var source = "\n"
@@ -238,13 +238,13 @@ struct WorkerBuild: CommandPlugin {
         }
 
         if rpcFunctions.isEmpty {
-            source += "\nexport default { fetch: __workersSwiftFetch };\n"
+            source += "\nexport default { fetch: __workerKitFetch };\n"
         } else {
             source += """
 
-                export default class extends __WorkersSwiftWorkerEntrypoint {
+                export default class extends __WorkerKitWorkerEntrypoint {
                   async fetch(request) {
-                    return __workersSwiftFetch(request, this.env, this.ctx);
+                    return __workerKitFetch(request, this.env, this.ctx);
                   }
 
                 """
@@ -252,7 +252,7 @@ struct WorkerBuild: CommandPlugin {
                 source += """
 
                       async \(name)(...args) {
-                        return __workersSwiftRPC("\(name)", args);
+                        return __workerKitRPC("\(name)", args);
                       }
 
                     """
@@ -265,15 +265,15 @@ struct WorkerBuild: CommandPlugin {
         // runtime or shim (`SwiftRuntime`, `ConsoleStream`, …) cannot
         // redeclare it.
         for (name, methods) in durableObjects {
-            let binding = "__workersSwiftDurableObjectClass_\(name)"
+            let binding = "__workerKitDurableObjectClass_\(name)"
             source += """
 
-                const \(binding) = class extends __WorkersSwiftDurableObjectBase {
+                const \(binding) = class extends __WorkerKitDurableObjectBase {
                   #swift;
 
                   constructor(ctx, env) {
                     super(ctx, env);
-                    this.#swift = __workersSwiftDurableObject("\(name)", ctx, env);
+                    this.#swift = __workerKitDurableObject("\(name)", ctx, env);
                     this.#swift.catch(() => {});
                   }
 

@@ -46,7 +46,7 @@ public struct EventMacro: PeerMacro {
             @_expose(wasm, "workers_js_main")
             #endif
             @_cdecl("workers_js_main")
-            public func __workersSwift_main() {
+            public func __workerKit_main() {
                 WorkersRuntime.registerFetch { request, env, context in
                     \(raw: call)
                 }
@@ -57,6 +57,6 @@ public struct EventMacro: PeerMacro {
 }
 
 @main
-struct WorkersSwiftMacrosPlugin: CompilerPlugin {
+struct WorkerKitMacrosPlugin: CompilerPlugin {
     let providingMacros: [any Macro.Type] = [EventMacro.self, DurableObjectMacro.self, RPCMacro.self]
 }

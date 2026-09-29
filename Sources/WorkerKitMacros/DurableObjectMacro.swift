@@ -8,7 +8,7 @@ import SwiftSyntaxMacros
 ///   to register the class, and `worker-build` reads its name to generate
 ///   the exported JavaScript class and its RPC methods;
 /// - if the class declares exactly one property of type `WorkersActorSystem`
-///   and does not already declare `__workersSwiftDistributedCall` itself,
+///   and does not already declare `__workerKitDistributedCall` itself,
 ///   the `@RPC` forwarder that hosts a distributed actor through it — see
 ///   `distributedHostPropertyName(in:)`.
 public struct DurableObjectMacro: PeerMacro, MemberMacro, ExtensionMacro {
@@ -76,8 +76,8 @@ public struct DurableObjectMacro: PeerMacro, MemberMacro, ExtensionMacro {
             #if arch(wasm32)
             @_expose(wasm, "\(raw: exportName)")
             #endif
-            @_cdecl("__workersSwift_do_\(raw: name)")
-            public func __workersSwift_do_\(raw: name)() {
+            @_cdecl("__workerKit_do_\(raw: name)")
+            public func __workerKit_do_\(raw: name)() {
                 WorkersRuntime.registerDurableObject(\(raw: name).self, name: "\(raw: name)", rpc: \(raw: table))
             }
             """,
@@ -114,7 +114,7 @@ public struct DurableObjectMacro: PeerMacro, MemberMacro, ExtensionMacro {
 
 /// The name of the class's stored property of type `WorkersActorSystem`,
 /// if it declares exactly one — the convention `@DurableObject` looks for
-/// to auto-generate the `__workersSwiftDistributedCall` RPC forwarder that
+/// to auto-generate the `__workerKitDistributedCall` RPC forwarder that
 /// hosts a distributed actor through it (see `WorkersActorSystem`'s
 /// per-Durable-Object-id hosting). Ambiguous (zero or more than one match)
 /// falls back to requiring the forwarder be written by hand, same as
@@ -132,7 +132,7 @@ private func distributedHostPropertyName(in classDecl: ClassDeclSyntax) -> Strin
     return candidates.count == 1 ? candidates[0] : nil
 }
 
-/// The `__workersSwiftDistributedCall` RPC forwarder for `classDecl`'s
+/// The `__workerKitDistributedCall` RPC forwarder for `classDecl`'s
 /// `WorkersActorSystem` property (see `distributedHostPropertyName(in:)`),
 /// or `nil` if the class doesn't have exactly one such property or already
 /// declares the method itself.
@@ -164,9 +164,9 @@ private func synthesizedDistributedCallMethod(in classDecl: ClassDeclSyntax) -> 
 }
 
 /// `WorkersActorSystem.entryPointName`'s value, duplicated here since the
-/// macro target cannot import `WorkersSwift` (that would be circular — this
-/// package is what `WorkersSwift` depends on for macro expansion).
-private let WorkersActorSystemEntryPointName = "__workersSwiftDistributedCall"
+/// macro target cannot import `WorkerKit` (that would be circular — this
+/// package is what `WorkerKit` depends on for macro expansion).
+private let WorkersActorSystemEntryPointName = "__workerKitDistributedCall"
 
 /// `@RPC` marks a method callable by other workers:
 ///
@@ -216,8 +216,8 @@ public struct RPCMacro: PeerMacro {
             #if arch(wasm32)
             @_expose(wasm, "workers_rpc:\(raw: name)")
             #endif
-            @_cdecl("__workersSwift_rpc_\(raw: name)")
-            public func __workersSwift_rpc_\(raw: name)() {
+            @_cdecl("__workerKit_rpc_\(raw: name)")
+            public func __workerKit_rpc_\(raw: name)() {
                 WorkersRuntime.registerRPC(name: "\(raw: name)") { arguments in
                     \(raw: rpcCallBody(function, receiver: ""))
                 }
@@ -267,7 +267,7 @@ func unsupportedRPCParameter(_ method: FunctionDeclSyntax) -> String? {
     return nil
 }
 
-/// Whether `element` is `@RPC`, including the qualified `@WorkersSwift.RPC`.
+/// Whether `element` is `@RPC`, including the qualified `@WorkerKit.RPC`.
 private func isRPCAttribute(_ element: AttributeListSyntax.Element) -> Bool {
     isAttribute(element, named: "RPC")
 }

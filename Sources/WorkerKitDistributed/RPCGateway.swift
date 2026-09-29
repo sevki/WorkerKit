@@ -1,6 +1,6 @@
 #if arch(wasm32)
 import JavaScriptKit
-import WorkersSwift
+import WorkerKit
 
 /// The worker end of `WorkersActorSystem`'s native build: a Durable Object
 /// serving a hibernatable WebSocket where each text message is one JSON

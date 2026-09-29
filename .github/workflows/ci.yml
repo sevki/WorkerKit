@@ -126,16 +126,16 @@ jobs:
       # warnings-as-errors catches broken doc links (a renamed symbol, a
       # dangling `<doc:...>`) at PR time, before they reach the published site.
       - name: swift package generate-documentation
-        run: swift package generate-documentation --target WorkersSwift --warnings-as-errors
+        run: swift package generate-documentation --target WorkerKit --warnings-as-errors
 
       - name: swift package generate-documentation (for GitHub Pages)
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           swift package --allow-writing-to-directory docs \
-            generate-documentation --target WorkersSwift \
+            generate-documentation --target WorkerKit \
             --disable-indexing \
             --transform-for-static-hosting \
-            --hosting-base-path workers-swift \
+            --hosting-base-path WorkerKit \
             --output-path docs
 
       - uses: actions/upload-pages-artifact@v3

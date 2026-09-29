@@ -21,7 +21,7 @@
         @Steps {
             @Step {
                 Create a new Swift package with a library target for the
-                shared actor code, depending on `WorkersDistributed` — the
+                shared actor code, depending on `WorkerKitDistributed` — the
                 one module with both the worker-side (Workers RPC) and
                 native (WebSocket) transports behind the same
                 `WorkersActorSystem` type.
@@ -51,8 +51,8 @@
         @Steps {
             @Step {
                 Add the worker executable target, depending on the shared
-                `GreeterKit` target plus `WorkersSwift` and
-                `WorkersDistributed`.
+                `GreeterKit` target plus `WorkerKit` and
+                `WorkerKitDistributed`.
 
                 @Code(name: "Package.swift", file: "04-package-worker-target.swift")
             }
@@ -61,7 +61,7 @@
                 In the worker, construct the actor eagerly and host it on a
                 `WorkersActorSystem`, then forward the one fixed RPC entry
                 point every `WorkersActorSystem` call arrives through —
-                named exactly `__workersSwiftDistributedCall` — to
+                named exactly `__workerKitDistributedCall` — to
                 `receive(identifier:arguments:genericSubstitutions:)`.
 
                 @Code(name: "GreeterWorker/Worker.swift", file: "03-worker-host-actor.swift")
@@ -73,7 +73,7 @@
         @ContentAndMedia {
             `RPCGateway` is a library Durable Object that serves a
             hibernatable WebSocket and relays each call it receives, as
-            JSON, to the worker's `__workersSwiftDistributedCall` through
+            JSON, to the worker's `__workerKitDistributedCall` through
             its own `SELF` service binding — it hosts nothing itself, so
             the same gateway works for any worker that hosts a
             `WorkersActorSystem` singleton this way.
@@ -109,7 +109,7 @@
         @Steps {
             @Step {
                 Add a second executable target for the CLI, depending on
-                `GreeterKit` and `WorkersDistributed`.
+                `GreeterKit` and `WorkerKitDistributed`.
 
                 @Code(name: "Package.swift", file: "07-package-cli-target.swift")
             }

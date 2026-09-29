@@ -1,14 +1,14 @@
-# ``WorkersSwift``
+# ``WorkerKit``
 
 Write Cloudflare Workers in Swift, in the style of [workers-rs](https://github.com/cloudflare/workers-rs), and run them on [workerd](https://github.com/cloudflare/workerd) and [denoland/celld](https://github.com/denoland/celld).
 
 ## Overview
 
-A worker is a Swift package that depends on `WorkersSwift` and exposes one
+A worker is a Swift package that depends on `WorkerKit` and exposes one
 `@Event(.fetch)` function:
 
 ```swift
-import WorkersSwift
+import WorkerKit
 
 @Event(.fetch)
 func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {

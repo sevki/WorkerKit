@@ -21,6 +21,19 @@ func fetch(req: Request, env: Env, ctx: Context) async throws -> Response {
     case ("GET", "/env"):
         return .ok(env.variable("GREETING") ?? "")
 
+    case ("GET", "/cf"):
+        // Cloudflare-populated request metadata, nil unless the runtime is
+        // configured to attach it (see harness.mjs's cfBlobHeader).
+        guard let cf = req.cf else {
+            return .ok("no cf")
+        }
+        return .ok([
+            "asn=\(cf.asn.map(String.init) ?? "")",
+            "asOrganization=\(cf.asOrganization ?? "")",
+            "country=\(cf.country ?? "")",
+            "colo=\(cf.colo ?? "")",
+        ].joined(separator: "\n"))
+
     case ("POST", "/echo"):
         return .ok(try await req.text())
 

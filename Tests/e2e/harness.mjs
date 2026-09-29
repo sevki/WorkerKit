@@ -228,7 +228,9 @@ const config :Workerd.Config = (
     (name = "main", worker = .worker)${kvServices}${r2Services},
     (name = "disk", disk = (path = ${JSON.stringify(join(directory, "disk"))}, writable = true)),
   ],
-  sockets = [(name = "http", address = "127.0.0.1:${port}", http = (), service = "main")],
+  # cfBlobHeader lets a test populate request.cf by sending a Cf-Blob header
+  # with a JSON object; without it, request.cf is undefined here.
+  sockets = [(name = "http", address = "127.0.0.1:${port}", http = (cfBlobHeader = "Cf-Blob"), service = "main")],
 );
 
 const worker :Workerd.Worker = (

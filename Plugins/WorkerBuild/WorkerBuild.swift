@@ -19,6 +19,13 @@ import PackagePlugin
 ///                           WorkerKitWasm, else the only executable)
 ///   -c, --configuration     debug or release (default: release)
 ///   --output <dir>          output directory (default: build/worker)
+///   -- <arguments>          everything after `--` is passed on to `swift build`,
+///                           such as `-Xswiftc -cache-compile-job` to compile
+///                           through a compilation cache
+///
+/// The nested `swift build` runs inside the plugin's sandbox on macOS, so a
+/// cache outside the package needs `--allow-writing-to-directory <dir>` (and a
+/// remote one `--allow-network-connections`) on the outer `swift package`.
 @main
 struct WorkerBuild: CommandPlugin {
     static let shimPath = "JavaScript/shim.mjs"
@@ -26,9 +33,16 @@ struct WorkerBuild: CommandPlugin {
     static let wasmName = "WorkerKit.wasm"
 
     func performCommand(context: PluginContext, arguments: [String]) async throws {
+        // Whatever follows `--` belongs to the nested `swift build`.
+        var arguments = arguments
+        var passthrough: [String] = []
+        if let separator = arguments.firstIndex(of: "--") {
+            passthrough = Array(arguments[(separator + 1)...])
+            arguments.removeSubrange(separator...)
+        }
+
         // ArgumentExtractor only understands long options, so take the
         // short `-c <configuration>` out first.
-        var arguments = arguments
         var shortConfiguration: String?
         if let index = arguments.firstIndex(of: "-c") {
             guard index + 1 < arguments.count else {
@@ -72,7 +86,7 @@ struct WorkerBuild: CommandPlugin {
             "--configuration", configuration,
             "--product", product,
             "-Xswiftc", "-Xclang-linker", "-Xswiftc", "-mexec-model=reactor",
-        ]
+        ] + passthrough
 
         print("worker-build: building \(product) with Swift SDK \(sdk) (\(configuration))")
         try run(swift, buildArguments)

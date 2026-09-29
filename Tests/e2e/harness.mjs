@@ -218,7 +218,7 @@ const launchers = {
     // disk-backed storage, so a DiskDirectory service backs it with a
     // subdirectory of this run's own temporary directory.
     const namespaces = Object.values(durableObjects)
-      .map((className) => `(className = ${JSON.stringify(className)}, uniqueKey = "WorkerKit-e2e-${className}", enableSql = true)`)
+      .map((className) => `(className = ${JSON.stringify(className)}, uniqueKey = "workerkit-e2e-${className}", enableSql = true)`)
       .join(", ");
     await writeFile(join(directory, "config.capnp"), `
 using Workerd = import "/workerd/workerd.capnp";
@@ -259,7 +259,7 @@ const r2Worker :Workerd.Worker = (
   async celld(directory, port, _wasmName, { vars, durableObjects, kvNamespaces, r2Buckets, selfBinding }) {
     const classNames = [...new Set(Object.values(durableObjects))];
     await writeFile(join(directory, "wrangler.jsonc"), JSON.stringify({
-      name: "WorkerKit-e2e",
+      name: "workerkit-e2e",
       main: "worker.mjs",
       no_bundle: true,
       compatibility_date: "2026-01-01",
@@ -270,7 +270,7 @@ const r2Worker :Workerd.Worker = (
       migrations: classNames.length ? [{ tag: "v1", new_sqlite_classes: classNames }] : [],
       kv_namespaces: Object.entries(kvNamespaces).map(([binding, id]) => ({ binding, id })),
       r2_buckets: Object.entries(r2Buckets).map(([binding, bucketName]) => ({ binding, bucket_name: bucketName })),
-      services: selfBinding ? [{ binding: selfBinding, service: "WorkerKit-e2e" }] : [],
+      services: selfBinding ? [{ binding: selfBinding, service: "workerkit-e2e" }] : [],
     }, null, 2));
     const binary = process.env.CELLD_BIN ?? "celld";
     return [binary, ["dev", directory, "--port", String(port), "--logs"]];
@@ -292,7 +292,7 @@ export async function serve(
     throw new Error(`unknown runtime ${runtime}`);
   }
 
-  const directory = await mkdtemp(join(tmpdir(), `WorkerKit-${runtime}-`));
+  const directory = await mkdtemp(join(tmpdir(), `workerkit-${runtime}-`));
   for (const [name, contents] of Object.entries(files)) {
     await writeFile(join(directory, name), contents);
   }

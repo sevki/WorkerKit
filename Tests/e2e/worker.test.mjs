@@ -43,8 +43,8 @@ for (const runtime of runtimes) {
           COUNTER: "Counter", FORKS: "ForkObject", PHILOSOPHERS: "PhilosopherObject", ECHO: "EchoSocket",
           RPCGATEWAY: "RPCGateway",
         },
-        kvNamespaces: { KV: "WorkerKit-e2e-kv" },
-        r2Buckets: { R2: "WorkerKit-e2e-r2" },
+        kvNamespaces: { KV: "workerkit-e2e-kv" },
+        r2Buckets: { R2: "workerkit-e2e-r2" },
         selfBinding: "SELF",
       });
     });

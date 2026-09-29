@@ -15,8 +15,8 @@
 // Two bindings need a value only Cloudflare can hand out and aren't
 // filled in here yet: `kv_namespaces[0].id`, from a real KV namespace, and
 // `r2_buckets[0].bucket_name`, from a real R2 bucket. Until those are
-// created (`wrangler kv namespace create WorkerKit-example-KV`,
-// `wrangler r2 bucket create WorkerKit-example`) and filled in below,
+// created (`wrangler kv namespace create workerkit-example-KV`,
+// `wrangler r2 bucket create workerkit-example`) and filled in below,
 // their bindings are omitted — /kv, /kv/<key>, /kv-bytes, /r2 and /r2/<key>
 // will 500, everything else (/, /dining/*, /distributed/*, /counter/*,
 // /rpc/add, /ws/echo, and the distributed-actor gateway) works.

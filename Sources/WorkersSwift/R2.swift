@@ -190,10 +190,10 @@ public struct R2Object: Sendable {
     }
 
     static func stringMap(_ value: JSValue) -> [String: String] {
-        guard let object = value.object else {
+        guard let object = value.object,
+              let keys = JSObject.global.Object.function!.keys!(object).array else {
             return [:]
         }
-        let keys = JSObject.global.Object.function!.keys!(object).array ?? []
         var result: [String: String] = [:]
         for key in keys {
             guard let key = key.string else {

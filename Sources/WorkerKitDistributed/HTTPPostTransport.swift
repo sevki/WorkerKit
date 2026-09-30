@@ -19,6 +19,10 @@ extension WorkersActorSystem {
                     deliver(await postCall(text, to: url, headers: headers, session: session))
                 }
             }
+            // `outgoing` ends on `close()`: requests still in flight fail, as the
+            // calls on a closed WebSocket do, instead of being waited for. A
+            // cancelled request throws, which `postCall` answers as an error.
+            group.cancelAll()
         }
     }
 
@@ -39,17 +43,38 @@ extension WorkersActorSystem {
                 let detail = String(decoding: data.prefix(200), as: UTF8.self)
                 return errorReply(for: text, "HTTP \(http.statusCode): \(detail)")
             }
-            return String(decoding: data, as: UTF8.self)
+            return validated(String(decoding: data, as: UTF8.self), for: text)
         } catch {
             return errorReply(for: text, "\(error)")
         }
     }
 
+    /// `reply` if it is a JSON object carrying the id of the call `text`, otherwise
+    /// an error reply for that call. A 200 that is not such a reply (HTML from an
+    /// intermediary, malformed JSON, another call's id) would be discarded by the
+    /// shared parser, or resolve a different call, and the call would never
+    /// finish.
+    static func validated(_ reply: String, for text: String) -> String {
+        let expected = callID(of: text)
+        guard let object = (try? JSONSerialization.jsonObject(with: Data(reply.utf8))) as? [String: Any],
+              let id = object["id"] as? String else {
+            return errorReply(for: text, "the response is not a reply (no JSON object with an id)")
+        }
+        guard id == expected else {
+            return errorReply(for: text, "the response answers call \"\(id)\", not \"\(expected)\"")
+        }
+        return reply
+    }
+
+    /// The `id` of the call `text`, or `""` when it cannot be read.
+    static func callID(of text: String) -> String {
+        (try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])?["id"] as? String ?? ""
+    }
+
     /// `{"id": <the call's id>, "error": message}`, which `remoteCall` turns into
     /// a thrown ``RemoteCallError`` for that one call.
     static func errorReply(for call: String, _ message: String) -> String {
-        let id = (try? JSONSerialization.jsonObject(with: Data(call.utf8)) as? [String: Any])?["id"] as? String ?? ""
-        let reply: [String: Any] = ["id": id, "error": message]
+        let reply: [String: Any] = ["id": callID(of: call), "error": message]
         let data = (try? JSONSerialization.data(withJSONObject: reply)) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)
     }

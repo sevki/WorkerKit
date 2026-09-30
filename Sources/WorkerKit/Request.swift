@@ -47,3 +47,24 @@ public final class Request: @unchecked Sendable {
         return array.withUnsafeBytes { Array($0) }
     }
 }
+
+extension Request {
+    /// Cloudflare-populated request metadata. `nil` for a request that never
+    /// passed through Cloudflare's network (e.g. local dev without cf
+    /// emulation, or a direct service-binding call).
+    public struct CFProperties: Sendable {
+        public var asn: Int?
+        public var asOrganization: String?
+        public var country: String?
+        public var colo: String?
+    }
+
+    public var cf: CFProperties? {
+        guard let object = jsObject.cf.object else { return nil }
+        return CFProperties(
+            asn: object.asn.number.map(Int.init),
+            asOrganization: object.asOrganization.string,
+            country: object.country.string,
+            colo: object.colo.string)
+    }
+}

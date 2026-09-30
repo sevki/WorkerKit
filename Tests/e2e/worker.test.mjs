@@ -95,6 +95,22 @@ for (const runtime of runtimes) {
       assert.equal(result.body, "hello from env");
     });
 
+    test("Request.cf decodes the cf blob workerd attaches to the request", { skip: runtime !== "workerd" }, async () => {
+      const cf = { asn: 13335, asOrganization: "Cloudflare, Inc.", country: "US", colo: "SJC" };
+      const result = await request("/cf", { headers: { "Cf-Blob": JSON.stringify(cf) } });
+      assertNotCrashed(result, "/cf");
+      assert.equal(result.body, "asn=13335\nasOrganization=Cloudflare, Inc.\ncountry=US\ncolo=SJC");
+    });
+
+    test("Request.cf with no cf data attached", async () => {
+      const result = await request("/cf");
+      assertNotCrashed(result, "/cf");
+      // workerd reports no cf object at all without a configured cfBlobHeader;
+      // celld's local dev emulation gives a cf object with every field empty.
+      const expected = runtime === "workerd" ? "no cf" : "asn=\nasOrganization=\ncountry=\ncolo=";
+      assert.equal(result.body, expected);
+    });
+
     test("Request.text() awaits the body", async () => {
       const result = await request("/echo", { method: "POST", body: "café ☕" });
       assertNotCrashed(result, "/echo");

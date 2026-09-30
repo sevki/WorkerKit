@@ -48,6 +48,9 @@ let package = Package(
         // WebSocket support at all).
         .package(url: "https://github.com/hummingbird-project/swift-websocket.git", from: "1.6.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.0"),
+        // The unix-socket transport talks to a local process with plain NIO;
+        // swift-websocket already brings it in, this names it.
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -77,6 +80,8 @@ let package = Package(
                 .product(name: "JavaScriptKit", package: "JavaScriptKit", condition: .when(platforms: [.wasi])),
                 .product(name: "WSClient", package: "swift-websocket", condition: .when(platforms: [.macOS, .linux])),
                 .product(name: "Logging", package: "swift-log", condition: .when(platforms: [.macOS, .linux])),
+                .product(name: "NIOCore", package: "swift-nio", condition: .when(platforms: [.macOS, .linux])),
+                .product(name: "NIOPosix", package: "swift-nio", condition: .when(platforms: [.macOS, .linux])),
             ]
         ),
         // The distributed actors HelloWorker hosts and HelloWorkerCLI calls.
@@ -124,6 +129,8 @@ let package = Package(
             name: "WorkerKitDistributedTests",
             dependencies: [
                 .target(name: "WorkerKitDistributed", condition: .when(platforms: [.macOS, .linux])),
+                .product(name: "NIOCore", package: "swift-nio", condition: .when(platforms: [.macOS, .linux])),
+                .product(name: "NIOPosix", package: "swift-nio", condition: .when(platforms: [.macOS, .linux])),
             ]
         ),
         .testTarget(

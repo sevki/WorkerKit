@@ -108,6 +108,19 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
         }
     }
 
+    /// Calls a process listening on the unix domain socket at `path`, typically a
+    /// small bridge that holds one connection to the worker for many short-lived
+    /// clients. The messages are the same `{"id","identifier","arguments",
+    /// "genericSubstitutions"}` calls and `{"id","result"}` / `{"id","error"}`
+    /// replies the WebSocket carries, one JSON document per line, since a local
+    /// socket needs no WebSocket framing. The connection stays open until
+    /// `close()`; if the peer closes it, the calls in flight and later ones fail.
+    public convenience init(unixSocket path: String) {
+        self.init { outgoing, deliver in
+            try await Self.unixSocketTransport(path: path, outgoing: outgoing, deliver: deliver)
+        }
+    }
+
     private init(transport: @escaping Transport) {
         var continuation: AsyncStream<String>.Continuation!
         let outgoing = AsyncStream<String> { continuation = $0 }

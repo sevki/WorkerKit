@@ -5,6 +5,9 @@
 #if os(macOS) || os(Linux)
 import Distributed
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Logging
 import WSClient
 
@@ -67,7 +70,45 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
     /// The largest message, and frame, the native client accepts.
     static let maxMessageSize = 1 << 20
 
-    private init(gatewayURL url: String, logger: Logger) {
+    /// How a connection moves text messages: writes everything `outgoing`
+    /// yields, hands each message it receives to `deliver`, and returns (or
+    /// throws) when the connection ends. Everything else, matching replies to
+    /// calls and failing the ones in flight when the connection ends, is the
+    /// same whatever the bytes travel over.
+    typealias Transport = @Sendable (
+        _ outgoing: AsyncStream<String>, _ deliver: @escaping @Sendable (String) -> Void
+    ) async throws -> Void
+
+    private convenience init(gatewayURL url: String, logger: Logger) {
+        self.init { outgoing, deliver in
+            try await Self.webSocketTransport(url: url, logger: logger, outgoing: outgoing, deliver: deliver)
+        }
+    }
+
+    /// Calls the worker with one HTTP `POST` per call instead of a WebSocket: the
+    /// body is the call's `{"id","identifier","arguments","genericSubstitutions"}`
+    /// JSON and the `200` response body is its `{"id","result"}` / `{"id","error"}`
+    /// reply, the same envelope the WebSocket carries. `url` is the worker's
+    /// endpoint for it, credentials included (a token in the query, or set
+    /// `headers`), for example `https://swift.example.workers.dev/__rpc?token=...`;
+    /// unlike `init(worker:)` nothing is appended to it.
+    ///
+    /// Each call is its own request, so there is no connection to establish
+    /// first, nothing on the worker that has to stay alive between calls, and a
+    /// request that fails fails only its own call: `remoteCall` throws a
+    /// ``RemoteCallError`` for it and the next call is unaffected. Use it for a
+    /// worker whose service keeps no state between calls and that serves the
+    /// endpoint (a worker serving only the WebSocket gateway does not).
+    public convenience init(
+        httpPost url: URL, headers: [String: String] = [:], session: URLSession = .shared
+    ) {
+        self.init { outgoing, deliver in
+            try await Self.httpPostTransport(
+                url: url, headers: headers, session: session, outgoing: outgoing, deliver: deliver)
+        }
+    }
+
+    private init(transport: @escaping Transport) {
         var continuation: AsyncStream<String>.Continuation!
         let outgoing = AsyncStream<String> { continuation = $0 }
         outgoingContinuation = continuation
@@ -76,39 +117,12 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
         connectionTask = Task {
             let terminationError: Error
             do {
-                // The client's frame limit defaults to 16 KiB and is enforced on
-                // received frames, but workerd sends each message as a single
-                // frame. Leaving it at the default made any reply over 16 KiB
-                // fail with close code 1009, well below the message limit.
-                let configuration = WebSocketClientConfiguration(maxFrameSize: Self.maxMessageSize)
-                _ = try await WebSocketClient.connect(
-                    url: url, configuration: configuration, logger: logger
-                ) { inbound, outbound, _ in
-                    try await withThrowingTaskGroup(of: Void.self) { group in
-                        group.addTask {
-                            for try await text in outgoing {
-                                try await outbound.write(.text(text))
-                            }
-                        }
-                        group.addTask {
-                            for try await message in inbound.messages(maxSize: Self.maxMessageSize) {
-                                guard case .text(let text) = message, let data = text.data(using: .utf8),
-                                      let reply = try? RemoteReply(jsonData: data) else {
-                                    continue
-                                }
-                                let continuation = state.withLock { $0.pending.removeValue(forKey: reply.id) }
-                                continuation?.resume(returning: reply)
-                            }
-                        }
-                        // Either side finishing (outgoing closed by close(),
-                        // or the server closing the connection) ends the
-                        // whole call, which is what makes WebSocketClient
-                        // perform the closing handshake. Neither is an
-                        // error, so `group.next()` returns normally here —
-                        // the pending-call drain below still has to run.
-                        try await group.next()
-                        group.cancelAll()
+                try await transport(outgoing) { text in
+                    guard let data = text.data(using: .utf8), let reply = try? RemoteReply(jsonData: data) else {
+                        return
                     }
+                    let continuation = state.withLock { $0.pending.removeValue(forKey: reply.id) }
+                    continuation?.resume(returning: reply)
                 }
                 terminationError = RemoteCallError(message: "WorkersActorSystem: connection closed")
             } catch {
@@ -122,6 +136,42 @@ public final class WorkersActorSystem: DistributedActorSystem, @unchecked Sendab
             }
             for pendingContinuation in waiting.values {
                 pendingContinuation.resume(throwing: terminationError)
+            }
+        }
+    }
+
+    private static func webSocketTransport(
+        url: String, logger: Logger, outgoing: AsyncStream<String>,
+        deliver: @escaping @Sendable (String) -> Void
+    ) async throws {
+        // The client's frame limit defaults to 16 KiB and is enforced on
+        // received frames, but workerd sends each message as a single
+        // frame. Leaving it at the default made any reply over 16 KiB
+        // fail with close code 1009, well below the message limit.
+        let configuration = WebSocketClientConfiguration(maxFrameSize: maxMessageSize)
+        _ = try await WebSocketClient.connect(
+            url: url, configuration: configuration, logger: logger
+        ) { inbound, outbound, _ in
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    for try await text in outgoing {
+                        try await outbound.write(.text(text))
+                    }
+                }
+                group.addTask {
+                    for try await message in inbound.messages(maxSize: maxMessageSize) {
+                        guard case .text(let text) = message else { continue }
+                        deliver(text)
+                    }
+                }
+                // Either side finishing (outgoing closed by close(),
+                // or the server closing the connection) ends the
+                // whole call, which is what makes WebSocketClient
+                // perform the closing handshake. Neither is an
+                // error, so `group.next()` returns normally here —
+                // the pending-call drain still has to run.
+                try await group.next()
+                group.cancelAll()
             }
         }
     }

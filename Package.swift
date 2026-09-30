@@ -119,6 +119,13 @@ let package = Package(
             name: "WorkerKitTests",
             dependencies: ["WorkerKit"]
         ),
+        // The native client's transports: only they exist off the worker.
+        .testTarget(
+            name: "WorkerKitDistributedTests",
+            dependencies: [
+                .target(name: "WorkerKitDistributed", condition: .when(platforms: [.macOS, .linux])),
+            ]
+        ),
         .testTarget(
             name: "WorkerKitMacrosTests",
             dependencies: [

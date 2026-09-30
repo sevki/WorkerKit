@@ -6,7 +6,8 @@
 #
 # Downloads the latest *released* CASPlugin from sevki/llbuild-worker (the
 # artifact users install, not a build of this checkout) and exports
-# SWIFT_CACHE_FLAGS for later steps:
+# SWIFT_CACHE_FLAGS for later steps (the Swift compiles; C compiles ride
+# along through CC, see the end of this file):
 #
 #   swift test ${SWIFT_CACHE_FLAGS:+--build-system native $SWIFT_CACHE_FLAGS}
 #
@@ -65,3 +66,99 @@ flags=(
 )
 echo "SWIFT_CACHE_FLAGS=${flags[*]}" >> "$GITHUB_ENV"
 echo "Compiling Swift through $remote with $dir/$lib"
+
+# The C targets this package pulls in (swift-nio's shims, BoringSSL, ...) are
+# compiled by clang itself, which takes the same plugin through its own
+# -fcas-* options. They can't ride along in SWIFT_CACHE_FLAGS: SwiftPM only
+# has -Xcc for them, and -Xcc also reaches swiftc's clang importer, which
+# rejects -fdepscan ("clang importer creation failed"). So SwiftPM is
+# pointed, through CC, at a small wrapper that adds the cache options to the
+# invocations that can take them and runs every other one untouched.
+# (Editing every clang with CCC_OVERRIDE_OPTIONS instead cannot tell
+# invocations apart, and broke both platforms.) Two things clang's compile
+# cache cannot do, both reproduced:
+#
+#  - Assembly. `-fdepscan` on a .S file fails ("gcc: error: language
+#    response-file not recognized" here, "posix_spawn failed" on the CI runner;
+#    BoringSSL has .S files). Assembly, and anything that is not a compile
+#    (a link, a preprocess-only run), goes straight to clang.
+#  - Modules. SwiftPM passes -fmodules, and a file that includes <stdbool.h>
+#    then aborts clang on Linux ("unexpected call to lookupModuleOutput") and
+#    fails Apple's ("cached output file has unknown path ...ModuleCache/
+#    ..._Builtin_stdbool.pcm"). The wrapper appends -fno-modules, which comes
+#    after SwiftPM's -fmodules and wins, and the module-map flags are dropped
+#    too (a target that includes another's header, like swift-nio-ssl's
+#    CNIOBoringSSLShims, otherwise fails loading the include tree); these are
+#    plain C targets, and the object file does not depend on modules.
+#    Objective-C, which may @import, is left alone (by file extension and -x,
+#    not by -fobjc-* flags: macOS SwiftPM adds -fobjc-arc to every C compile),
+#    and so are WebAssembly compiles.
+clang="$(command -v clang || true)"
+wrapper="$RUNNER_TEMP/clang-cached"
+if [ -z "$clang" ]; then
+    echo "::notice::No clang on PATH, so C compiles run without the cache"
+    exit 0
+fi
+
+# The plugin links the Swift runtime (libswiftDistributed.so, ...). swift-frontend
+# finds it through its own search path, but a bare `clang` does not, so on Linux
+# it needs the toolchain's runtime directory on LD_LIBRARY_PATH (macOS resolves
+# it from the system). It is the directory the build already runs against.
+library_path="${LD_LIBRARY_PATH:-}"
+if [ "$(uname -s)" = Linux ]; then
+    swift_bin="$(dirname "$(readlink -f "$(command -v swift)")")"
+    if [ -d "$swift_bin/../lib/swift/linux" ]; then
+        library_path="$(cd "$swift_bin/../lib/swift/linux" && pwd)${library_path:+:$library_path}"
+    fi
+fi
+
+cat > "$wrapper" <<WRAPPER
+#!/bin/sh
+export LD_LIBRARY_PATH="$library_path"
+compile=0
+for arg in "\$@"; do
+    case "\$arg" in
+        -c) compile=1 ;;
+        *.S|*.s|*.sx|*.m|*.mm|-E|-S|-M|-MM|-emit-ast|-###|objective-c*|*wasm*) exec "$clang" "\$@" ;;
+    esac
+done
+[ "\$compile" = 1 ] || exec "$clang" "\$@"
+# Module maps make the include tree name modules, which -fno-modules cannot
+# load back ("failed to find module 'CNIOBoringSSL'"): keep includes textual.
+# A few of these also come with the operand as the next argument, which has to
+# go with the option.
+skip=0
+for arg; do
+    shift
+    if [ "\$skip" = 1 ]; then skip=0; continue; fi
+    case "\$arg" in
+        -fmodules-user-build-path|-fmodule-map-file|-fmodule-name) skip=1 ;;
+        -fmodules|-fmodules-*|-fmodule-map-file=*|-fmodule-name=*|-fbuiltin-module-map|-fimplicit-module-maps) ;;
+        *) set -- "\$@" "\$arg" ;;
+    esac
+done
+exec "$clang" "\$@" -fno-modules -Wno-unused-command-line-argument \\
+    -fdepscan -Rcompile-job-cache -Xclang -fcache-compile-job \\
+    -Xclang -fcas-path -Xclang "$RUNNER_TEMP/cas-c" \\
+    -Xclang -fcas-plugin-path -Xclang "$dir/$lib" \\
+    -Xclang -fcas-plugin-option -Xclang "remote-url=$remote"
+WRAPPER
+chmod +x "$wrapper"
+
+# Not every clang takes these options (an unknown one fails the build), so
+# compile a file that includes a system header, the way SwiftPM does (with
+# -fmodules), through the wrapper first, and export it only if that clang
+# answers with a compile-job-cache remark, proving the options were applied
+# and understood. The same check on Linux and macOS.
+probe="$RUNNER_TEMP/clang-probe"
+mkdir -p "$probe"
+printf '#include <stdbool.h>\nbool probe(void) { return true; }\n' > "$probe/probe.c"
+if output="$("$wrapper" -c "$probe/probe.c" -o "$probe/probe.o" \
+        -fmodules -fmodules-cache-path="$probe/modules" 2>&1)" \
+        && grep -q "compile job cache" <<<"$output"; then
+    echo "CC=$wrapper" >> "$GITHUB_ENV"
+    echo "Compiling C through the same cache ($wrapper)"
+else
+    # First line only: a clang that aborts prints a whole backtrace.
+    echo "::notice::This clang did not take the compile-cache options, so C compiles run without the cache: $(head -n 1 <<<"${output:-no output}")"
+fi

@@ -116,6 +116,11 @@ jobs:
           path: build/worker
           if-no-files-found: error
 
+      # Lets casd send its queued results to the Worker before the job ends.
+      - name: Stop casd
+        if: always()
+        run: Scripts/ci-stop-casd.sh
+
   macos:
     name: Swift tests (macOS)
     runs-on: macos-26
@@ -136,6 +141,11 @@ jobs:
         run: Scripts/ci-compile-cache.sh
 
       - run: swift test ${SWIFT_CACHE_FLAGS:+--build-system native $SWIFT_CACHE_FLAGS}
+
+      # Lets casd send its queued results to the Worker before the job ends.
+      - name: Stop casd
+        if: always()
+        run: Scripts/ci-stop-casd.sh
 
   docs:
     name: DocC documentation

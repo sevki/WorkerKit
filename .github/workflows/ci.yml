@@ -20,11 +20,25 @@ jobs:
     # since bundling a .so doesn't bundle the glibc it was linked against.
     # noble matches ubuntu-24.04's own glibc.
     container: swift:6.4-noble
+    env:
+      # llbuild-worker's own live compile cache, https://xcache.devtoo.ls
+      # (see Scripts/ci-compile-cache.sh): this job's own scope, so its
+      # compile churn never lands in production's default scope alongside
+      # real users, or in llbuild-worker's own CI lanes. A fork's pull
+      # request gets no secret and builds without the cache.
+      LLBUILD_CAS_TOKEN: ${{ secrets.XCACHE_TOKEN }}
+      LLBUILD_CAS_REMOTE_URL: https://xcache.devtoo.ls/ci-workerkit-linux
     steps:
       - uses: actions/checkout@v4
 
+      - name: Enable the compile cache
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends curl ca-certificates
+          Scripts/ci-compile-cache.sh
+
       - name: swift test
-        run: swift test
+        run: swift test ${SWIFT_CACHE_FLAGS:+--build-system native $SWIFT_CACHE_FLAGS}
 
       # HelloWorkerCLI isn't a dependency of any test target, so `swift
       # test` above doesn't build it - built here and handed to the e2e
@@ -50,7 +64,7 @@ jobs:
       # swiftlang/swift-corelibs-libdispatch#949), not anything in this
       # package. Force the older backend to avoid it.
       - name: swift build HelloWorkerCLI
-        run: swift build --product HelloWorkerCLI --build-system native
+        run: swift build --product HelloWorkerCLI --build-system native $SWIFT_CACHE_FLAGS
 
       - uses: actions/upload-artifact@v4
         with:
@@ -93,7 +107,7 @@ jobs:
       # toolchain itself.
       - name: swift package worker-build
         run: |
-          swift package --allow-writing-to-package-directory worker-build -c release
+          swift package --allow-writing-to-package-directory worker-build -c release -- ${SWIFT_CACHE_FLAGS:+--build-system native $SWIFT_CACHE_FLAGS}
           ls -l build/worker
 
       - uses: actions/upload-artifact@v4
@@ -105,6 +119,10 @@ jobs:
   macos:
     name: Swift tests (macOS)
     runs-on: macos-26
+    env:
+      # See the swift job.
+      LLBUILD_CAS_TOKEN: ${{ secrets.XCACHE_TOKEN }}
+      LLBUILD_CAS_REMOTE_URL: https://xcache.devtoo.ls/ci-workerkit-macos
     steps:
       - uses: actions/checkout@v4
 
@@ -114,7 +132,10 @@ jobs:
           sudo xcode-select -s "$xcode"
           swift --version
 
-      - run: swift test
+      - name: Enable the compile cache
+        run: Scripts/ci-compile-cache.sh
+
+      - run: swift test ${SWIFT_CACHE_FLAGS:+--build-system native $SWIFT_CACHE_FLAGS}
 
   docs:
     name: DocC documentation

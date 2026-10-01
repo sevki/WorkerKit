@@ -4,6 +4,15 @@
 import CompilerPluginSupport
 import PackageDescription
 
+// CI builds through the compile cache (Scripts/ci-compile-cache.sh), but a
+// compile replayed from a cache hit does not write index-store data, and
+// SwiftPM finds tests through the index store: "Failed opening
+// .../index/store/.../units/X.swift.o-..." otherwise. -Xfrontend
+// -cache-disable-replay makes these compiles run even on a hit, so they
+// write it; it does nothing without the cache flags, so this is harmless
+// locally.
+let testSwiftSettings: [SwiftSetting] = [.unsafeFlags(["-Xfrontend", "-cache-disable-replay"])]
+
 let package = Package(
     name: "WorkerKit",
     platforms: [.macOS(.v15)],
@@ -117,7 +126,8 @@ let package = Package(
         ),
         .testTarget(
             name: "WorkerKitTests",
-            dependencies: ["WorkerKit"]
+            dependencies: ["WorkerKit"],
+            swiftSettings: testSwiftSettings
         ),
         // The native client's transports: only they exist off the worker.
         .testTarget(
@@ -131,7 +141,8 @@ let package = Package(
             dependencies: [
                 "WorkerKitMacros",
                 .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
-            ]
+            ],
+            swiftSettings: testSwiftSettings
         ),
     ],
     swiftLanguageModes: [.v6]

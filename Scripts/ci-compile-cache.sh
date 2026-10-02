@@ -53,6 +53,54 @@ if ! curl -fsSL "https://github.com/sevki/llbuild-worker/releases/latest/downloa
     exit 0
 fi
 
+# A local cache daemon in front of the Worker. A package this size has thousands of small compile
+# results, and fetched one by one straight from the Worker each costs a network round trip: measured
+# here, a build through the cache alone took three times as long as compiling without it. casd
+# (llbuild-worker's daemon, a static binary from the same release as the plugin) keeps one connection
+# to the Worker and prefetches what the previous build used, so results come back from the loopback.
+# The compiler flags and the C wrapper below use $cache_url. Scripts/ci-stop-casd.sh stops it at the end
+# of the job, which is when it sends the results it has queued to the Worker. Best effort, like the
+# rest: if anything about it fails, the compiles go to the Worker as before.
+cache_url="$remote"
+case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64) casd_asset=casd-linux-x86_64 ;;
+    Darwin-arm64) casd_asset=casd-macos-arm64 ;;
+    *) casd_asset="" ;;
+esac
+if [ -n "$casd_asset" ] && [[ "$remote" =~ ^(https?://[^/]+)/([^/]+)$ ]]; then
+    origin="${BASH_REMATCH[1]}"
+    scope_name="${BASH_REMATCH[2]}"
+    release="https://github.com/sevki/llbuild-worker/releases/latest/download"
+    casd_dir="$RUNNER_TEMP/casd"
+    mkdir -p "$casd_dir"
+    sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d ' ' -f 1; else shasum -a 256 "$1" | cut -d ' ' -f 1; fi; }
+    if curl -fsSL -o "$casd_dir/$casd_asset.tar.gz" "$release/$casd_asset.tar.gz" \
+        && curl -fsSL -o "$casd_dir/SHA256SUMS" "$release/SHA256SUMS" \
+        && [ "$(awk -v f="$casd_asset.tar.gz" '$2 == f { print $1 }' "$casd_dir/SHA256SUMS")" = "$(sha256 "$casd_dir/$casd_asset.tar.gz")" ] \
+        && tar -xzf "$casd_dir/$casd_asset.tar.gz" -C "$casd_dir" && [ -x "$casd_dir/casd" ]; then
+        port="${LLBUILD_CASD_PORT:-4170}"
+        nohup "$casd_dir/casd" --upstream "$origin" --listen "127.0.0.1:$port" \
+            --cache "$RUNNER_TEMP/casd-cache" > "$RUNNER_TEMP/casd.log" 2>&1 < /dev/null &
+        echo $! > "$RUNNER_TEMP/casd.pid"
+        up=0
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            code="$(curl -s --noproxy 127.0.0.1 -o /dev/null -m 2 -w '%{http_code}' "http://127.0.0.1:$port/" || true)"
+            if [ -n "$code" ] && [ "$code" != 000 ]; then up=1; break; fi
+            sleep 1
+        done
+        if [ "$up" = 1 ]; then
+            cache_url="http://127.0.0.1:$port/$scope_name"
+            echo "Compiling through the local cache daemon $cache_url, upstream $origin"
+        else
+            echo "::warning::The local cache daemon did not answer: compiling straight against $remote ($(tail -n 2 "$RUNNER_TEMP/casd.log" 2>/dev/null | tr '\n' ' '))"
+            kill "$(cat "$RUNNER_TEMP/casd.pid")" 2>/dev/null || true
+            rm -f "$RUNNER_TEMP/casd.pid"
+        fi
+    else
+        echo "::warning::Could not get $casd_asset from llbuild-worker's latest release (or its checksum did not match): compiling straight against $remote"
+    fi
+fi
+
 # -explicit-module-build is what makes compile jobs cacheable; -Rcache-compile-job
 # leaves a hit or miss line per compile in the log.
 flags=(
@@ -60,12 +108,12 @@ flags=(
     -Xswiftc -explicit-module-build
     -Xswiftc -cas-path -Xswiftc "$RUNNER_TEMP/cas"
     -Xswiftc -cas-plugin-path -Xswiftc "$dir/$lib"
-    -Xswiftc -cas-plugin-option -Xswiftc "remote-url=$remote"
+    -Xswiftc -cas-plugin-option -Xswiftc "remote-url=$cache_url"
     -Xswiftc -cas-plugin-option -Xswiftc "remote-scope=$scope"
     -Xswiftc -Rcache-compile-job
 )
 echo "SWIFT_CACHE_FLAGS=${flags[*]}" >> "$GITHUB_ENV"
-echo "Compiling Swift through $remote with $dir/$lib"
+echo "Compiling Swift through $cache_url with $dir/$lib"
 
 # The C targets this package pulls in (swift-nio's shims, BoringSSL, ...) are
 # compiled by clang itself, which takes the same plugin through its own
@@ -141,7 +189,7 @@ exec "$clang" "\$@" -fno-modules -Wno-unused-command-line-argument \\
     -fdepscan -Rcompile-job-cache -Xclang -fcache-compile-job \\
     -Xclang -fcas-path -Xclang "$RUNNER_TEMP/cas-c" \\
     -Xclang -fcas-plugin-path -Xclang "$dir/$lib" \\
-    -Xclang -fcas-plugin-option -Xclang "remote-url=$remote"
+    -Xclang -fcas-plugin-option -Xclang "remote-url=$cache_url"
 WRAPPER
 chmod +x "$wrapper"
 

@@ -249,6 +249,8 @@ npm run test:e2e    # the built worker in workerd (after worker-build)
 
 `npm run test:e2e` serves `build/worker` (or `WORKER_DIR`) with workerd from npm. Set `E2E_RUNTIMES=workerd,celld` to also run it on a `celld` binary on `PATH` (or `CELLD_BIN`). CI builds the worker with the Wasm SDK and runs the suite on both runtimes, and runs `swift test` on Linux and macOS.
 
+CI compiles this package through [llbuild-worker](https://github.com/sevki/llbuild-worker)'s compilation cache, the live cache this package's own build is also a test of. Each job downloads the released `CASPlugin` and `casd` (a small local daemon that keeps one connection to the cache and serves the compiler from the loopback, `Scripts/ci-compile-cache.sh`) and compiles through them, so a build that has not changed replays its results instead of compiling them. A pull request from a fork has no cache token and builds without it.
+
 ## Documentation
 
 The public API is documented with [DocC](https://www.swift.org/documentation/docc/) in doc comments and in `Sources/WorkerKit/Documentation.docc`, and published at <https://sevki.github.io/WorkerKit/documentation/workerkit/> on every push to `main`.
